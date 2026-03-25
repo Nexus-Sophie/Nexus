@@ -92,7 +92,6 @@ class CodeSandbox:
             detach=True,
             auto_remove=True,
             mem_limit=self._config.mem_limit,
-            network_mode="none",
             security_opt=["no-new-privileges"],
             volumes={self._workdir: {"bind": "/workspace", "mode": "rw"}},
             working_dir="/workspace",
