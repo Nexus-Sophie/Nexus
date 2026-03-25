@@ -1,4 +1,4 @@
-from typing import Dict, Callable, List
+from typing import Callable
 from pydantic import BaseModel, Field
 from openai import pydantic_function_tool
 from src.sandbox import CodeSandbox
@@ -52,7 +52,6 @@ class ListFiles(BaseModel):
     path: str = Field(default="/workspace", description="Directory path to list (default: /workspace)")
 
 
-# ── Tool definitions (OpenAI function schemas) ────────────────────────────────
 
 RUN_CODE    = pydantic_function_tool(RunCode)
 RUN_COMMAND = pydantic_function_tool(RunCommand)
@@ -62,7 +61,7 @@ APPEND_FILE = pydantic_function_tool(AppendFile)
 EDIT_FILE   = pydantic_function_tool(EditFile)
 LIST_FILES  = pydantic_function_tool(ListFiles)
 
-SANDBOX_TOOL_DEFINITIONS: List = [
+SANDBOX_TOOL_DEFINITIONS: list = [
     RUN_CODE, RUN_COMMAND, WRITE_FILE, READ_FILE, APPEND_FILE, EDIT_FILE, LIST_FILES,
 ]
 
@@ -94,7 +93,7 @@ class SandboxToolKit:
     async def list_files(self, path: str = "/workspace") -> dict:
         return await self._sandbox.list_files(path)
 
-    def as_tool_kits(self) -> Dict[str, Callable]:
+    def as_tool_kits(self) -> dict[str, Callable]:
         """Return a name→callable mapping where names match pydantic_function_tool class names."""
         return {
             "RunCode":    self.run_code,

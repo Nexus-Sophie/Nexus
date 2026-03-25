@@ -64,7 +64,7 @@ class Agent(BaseModel):
     llm_config: ModelConfig
     sample_config: SampleConfig | None = None
     max_attempts: int | None = None
-    openai_client: Any = None
+    openai_client: OpenAI | None = None
 
 
     @model_validator(mode="after")

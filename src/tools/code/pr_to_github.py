@@ -8,7 +8,8 @@ import httpx
 
 class PrToGithub(BaseModel):
     """Push the current local branch to GitHub and open a pull request.
-    Requires a GitHub personal access token with repo scope."""
+    Requires a GitHub personal access token with repo scope.
+    Every PR must close at least one issue — provide the issue numbers in closes_issues."""
 
     token: str = Field(description="GitHub personal access token with repo scope")
     repo: str = Field(description="Repository in owner/repo format (e.g. acme/my-project)")
@@ -16,6 +17,7 @@ class PrToGithub(BaseModel):
     body: str = Field(description="Pull request description (markdown supported)")
     head: str = Field(description="Branch that contains the changes to be merged")
     base: str = Field(default="main", description="Target branch for the PR (default: main)")
+    closes_issues: list[int] = Field(description="Issue numbers this PR resolves — at least one required (e.g. [42])")
     local_path: str | None = Field(default=None, description="Local repository path to push from. Uses current working directory when omitted.")
     draft: bool = Field(default=False, description="Open as a draft pull request (default: false)")
 
@@ -30,10 +32,14 @@ async def pr_to_github(
     body: str,
     head: str,
     base: str = "main",
+    closes_issues: list[int] | None = None,
     local_path: str | None = None,
     draft: bool = False,
 ) -> dict:
     """Push the current branch and open a pull request on GitHub."""
+    if closes_issues:
+        body = body + "\n\n" + "\n".join(f"Closes #{n}" for n in closes_issues)
+
     work_dir = Path(local_path).resolve() if local_path else Path.cwd()
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
 
