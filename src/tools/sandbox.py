@@ -1,7 +1,7 @@
 from typing import Callable
 from pydantic import BaseModel, Field
 from openai import pydantic_function_tool
-from src.sandbox import CodeSandbox
+from src.sandbox import Sandbox
 
 
 class RunCode(BaseModel):
@@ -67,9 +67,9 @@ SANDBOX_TOOL_DEFINITIONS: list = [
 
 
 class SandboxToolKit:
-    """Binds a live CodeSandbox instance to agent-dispatchable callables."""
+    """Binds a live Sandbox instance to agent-dispatchable callables."""
 
-    def __init__(self, sandbox: CodeSandbox) -> None:
+    def __init__(self, sandbox: Sandbox) -> None:
         self._sandbox = sandbox
 
     async def run_code(self, code: str) -> dict:
