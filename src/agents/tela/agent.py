@@ -1,0 +1,182 @@
+from typing import List, Any
+
+from pydantic import PrivateAttr, ConfigDict
+from openai.types.chat.chat_completion import ChatCompletion
+from openai.types.chat.chat_completion_message_param import (
+    ChatCompletionMessageParam,
+    ChatCompletionAssistantMessageParam,
+)
+
+from src.agents.base.agent import Agent, BaseAgentStepResult, ModelConfig
+from src.agents.tela.system_prompt import TELA_SYSTEM_PROMPT
+from src.sandbox import Sandbox, SandboxConfig, PYTHON_312
+from src.tools.sandbox import SandboxToolKit, SANDBOX_TOOL_DEFINITIONS
+from src.tools.code import (
+    GITHUB_TOOL_DEFINITIONS,
+    GithubToolKit,
+)
+from src.mcps import web_fetch, WEB_FETCH
+from src.tools.web_search import web_search, TOOL_DEFINITION as WEB_SEARCH
+
+
+_ALL_TOOL_DEFINITIONS = [
+    *SANDBOX_TOOL_DEFINITIONS,
+    *GITHUB_TOOL_DEFINITIONS,
+    WEB_FETCH,
+    WEB_SEARCH,
+]
+
+
+class Tela(Agent):
+    """Tela — a Python coding agent with a sandboxed Docker workspace.
+
+    Must be used as an async context manager so the sandbox container
+    is started and stopped cleanly:
+
+        async with Tela(...) as tela:
+            result = await tela.work(question=..., ...)
+    """
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    github_token: str | None = None
+    github_repo: str | None = None   # owner/repo, e.g. "acme/nexus"
+    sandbox_config: SandboxConfig = PYTHON_312
+
+    _sandbox: Sandbox | None = PrivateAttr(default=None)
+    _sandbox_tools: SandboxToolKit | None = PrivateAttr(default=None)
+
+    async def __aenter__(self) -> "Tela":
+        self._sandbox = Sandbox(self.sandbox_config)
+        await self._sandbox.__aenter__()
+        self._sandbox_tools = SandboxToolKit(self._sandbox)
+        github_kit = GithubToolKit(self._sandbox)
+
+        kits = self._sandbox_tools.as_tool_kits()
+        kits["FetchFromGithub"] = github_kit.fetch_from_github
+        kits["CreateGithubIssue"] = github_kit.create_github_issue
+        kits["PrToGithub"] = github_kit.pr_to_github
+        kits["WebFetch"] = web_fetch
+        kits["WebSearch"] = web_search
+        self.tool_kits = kits
+
+        if self.github_repo or self.github_token:
+            repo_lines = ["\n## Your Repository"]
+            if self.github_repo:
+                repo_lines.append(f"- Repo: {self.github_repo}")
+            if self.github_token:
+                repo_lines.append(f"- Token: {self.github_token}  (use for git auth and all GitHub API calls)")
+            if self.github_repo:
+                clone_url = (
+                    f"https://{self.github_token}@github.com/{self.github_repo}"
+                    if self.github_token
+                    else f"https://github.com/{self.github_repo}"
+                )
+                repo_lines.append(f"- Clone URL: {clone_url}")
+            self.system_prompt = self.system_prompt + "\n".join(repo_lines) + "\n"
+
+        return self
+
+    async def __aexit__(self, *args) -> None:
+        if self._sandbox:
+            await self._sandbox.__aexit__(*args)
+            self._sandbox = None
+            self._sandbox_tools = None
+
+    def step(self, current_turn_ctx: List[ChatCompletionMessageParam]) -> BaseAgentStepResult:
+        if self._sandbox is None:
+            raise RuntimeError("Tela must be used as an async context manager (async with Tela(...) as tela:)")
+
+        kwargs: dict = {
+            "model": self.llm_config.model,
+            "messages": current_turn_ctx,
+            "tools": _ALL_TOOL_DEFINITIONS,
+        }
+        if self.sample_config:
+            if self.sample_config.top_p is not None:
+                kwargs["top_p"] = self.sample_config.top_p
+            if self.sample_config.extra_body:
+                kwargs["extra_body"] = self.sample_config.extra_body
+
+        completion: ChatCompletion = self.openai_client.chat.completions.create(**kwargs)
+        choice = completion.choices[0]
+        message = choice.message
+
+        msg_param: ChatCompletionAssistantMessageParam = {
+            "role": "assistant",
+            "content": message.content,
+        }
+        if message.tool_calls:
+            msg_param["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in message.tool_calls
+            ]
+
+        return BaseAgentStepResult(
+            finish_reason=choice.finish_reason,
+            reasoning=None,
+            completion_content=message.content,
+            tool_calls=message.tool_calls or None,
+            message_param=msg_param,
+            current_step_consume_tokens=completion.usage.total_tokens if completion.usage else 0,
+        )
+
+
+    # def SOP(self, work_history: List[ChatCompletionMessageParam]) -> str:
+        
+    #     pass
+
+    def last_report_current_process(self, current_turn_ctx: List[ChatCompletionMessageParam]) -> str:
+        for msg in reversed(current_turn_ctx):
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                content = msg.get("content")
+                if content:
+                    return content
+        return "Tela reached the maximum number of attempts without completing the task."
+
+
+    def compact(self, current_turn_ctx: List[ChatCompletionMessageParam]) -> List[ChatCompletionMessageParam]:
+        """Keep system message + first user message + last 10 messages."""
+        if len(current_turn_ctx) <= 12:
+            return current_turn_ctx
+        system_msg = current_turn_ctx[0]
+        first_user = next(
+            (m for m in current_turn_ctx[1:] if isinstance(m, dict) and m.get("role") == "user"),
+            None,
+        )
+        recent = current_turn_ctx[-10:]
+        result: List[ChatCompletionMessageParam] = [system_msg]
+        if first_user and first_user not in recent:
+            result.append(first_user)
+        result.extend(recent)
+        return result
+
+
+    @classmethod
+    def create(
+        cls,
+        base_url: str,
+        api_key: str,
+        model: str,
+        max_context: int,
+        github_repo: str,
+        max_attempts: int = 30,
+        github_token: str | None = None,
+        sandbox_config: SandboxConfig = PYTHON_312,
+    ) -> "Tela":
+        """Convenience factory with sensible defaults."""
+        return cls(
+            name="Tela",
+            tool_kits=None,
+            base_url=base_url,
+            api_key=api_key,
+            system_prompt=TELA_SYSTEM_PROMPT,
+            llm_config=ModelConfig(model=model, max_length_context=max_context),
+            github_repo=github_repo,
+            max_attempts=max_attempts,
+            github_token=github_token,
+            sandbox_config=sandbox_config,
+        )
