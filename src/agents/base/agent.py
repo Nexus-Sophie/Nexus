@@ -51,6 +51,7 @@ class WorkTempStatus(TypedDict):
     process: Required[Literal["START", "PROCESS", "COMPLETED", "FAILED", "EXCEED_ATTEMPTS"]]
     agent_content: Required[str | None]
     current_use_tool: Required[List[str] | None]
+    current_use_tool_args: Required[List[Dict[str, Any]] | None]
 
 
 class Agent(BaseModel):
@@ -105,7 +106,7 @@ class Agent(BaseModel):
 
         self._process_callback(
             update_process_callback, 
-            work_temp_status=WorkTempStatus(process="START", agent_content=None, current_use_tool=None)
+            work_temp_status=WorkTempStatus(process="START", agent_content=None, current_use_tool=None, current_use_tool_args=None)
         )
 
         while not terminate and (True if self.max_attempts is None else tries <= self.max_attempts):
@@ -121,7 +122,9 @@ class Agent(BaseModel):
                     update_process_callback, 
                     work_temp_status=WorkTempStatus(
                         process="COMPLETED", 
-                        agent_content=step_response.completion_content, current_use_tool=None
+                        agent_content=step_response.completion_content,
+                        current_use_tool=None,
+                        current_use_tool_args=None,
                     )
                 )
                 try:
@@ -135,12 +138,14 @@ class Agent(BaseModel):
             else:
                 if step_response.finish_reason == "tool_calls" and step_response.tool_calls is not None:
                     tool_names = [tc.function.name for tc in step_response.tool_calls]
+                    tool_args = [tc.function.arguments for tc in step_response.tool_calls]
                     self._process_callback(
                         update_process_callback,
                         work_temp_status=WorkTempStatus(
                             process="PROCESS",
                             agent_content=step_response.completion_content,
-                            current_use_tool=tool_names
+                            current_use_tool=tool_names,
+                            current_use_tool_args=tool_args,
                         )
                     )
 
@@ -187,6 +192,7 @@ class Agent(BaseModel):
                     process="EXCEED_ATTEMPTS",
                     agent_content=agent_content,
                     current_use_tool=None,
+                    current_use_tool_args=None,
                 )
             )
             try:
