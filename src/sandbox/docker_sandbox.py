@@ -1,11 +1,11 @@
 import asyncio
+import base64
 import tempfile
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 import docker
-import docker.errors
 
 
 @dataclass(frozen=True)
@@ -47,7 +47,6 @@ JAVA_17    = SandboxConfig("eclipse-temurin:17-jdk-jammy", "java", ".java", mem_
 JAVA_21    = SandboxConfig("eclipse-temurin:21-jdk-jammy", "java", ".java", mem_limit="256m")
 
 
-
 class Sandbox:
     """Async context manager that runs an isolated Docker container as a sandbox.
 
@@ -55,9 +54,9 @@ class Sandbox:
     share the same container, so state (installed packages, written files)
     persists across calls within the same session.
 
-    Files live under /workspace inside the container, which is backed by a
-    temporary directory on the host — making read/write operations fast (no
-    docker cp round-trip needed).
+    All file I/O runs through Docker exec — the host filesystem is never
+    touched directly. The /workspace volume mount is kept for potential
+    future use but is not relied on by any operation.
 
     Requires Docker to be running locally. No API key or internet access needed.
 
@@ -69,7 +68,7 @@ class Sandbox:
         async with Sandbox(NODE_20) as sandbox:
             await sandbox.run_code("console.log('hello')")
 
-        # Custom image
+        # Custom image (e.g. Python + Nginx, TS + Java, specific version)
         cfg = SandboxConfig("myorg/ts-java:latest", "ts-node", ".ts")
         async with Sandbox(cfg) as sandbox:
             await sandbox.run_code("console.log('hello from ts')")
@@ -97,7 +96,7 @@ class Sandbox:
             working_dir="/workspace",
         )
         return self
-    
+
 
     async def __aexit__(self, *_) -> None:
         if self._container:
@@ -109,14 +108,22 @@ class Sandbox:
 
 
     async def run_code(self, code: str) -> dict:
-        """Write code to a temp script and execute it with the config's runner.
+        """Write code to a temp script inside the container and execute it.
 
         Returns dict with keys: success, stdout, stderr, exit_code, error.
         """
-        filename = f"_nexus_exec{self._config.code_ext}"
-        (Path(self._workdir) / filename).write_text(code, encoding="utf-8")
-        result = await self._exec([self._config.code_runner, f"/workspace/{filename}"])
-        (Path(self._workdir) / filename).unlink(missing_ok=True)
+        script_path = f"/workspace/_nexus_exec{self._config.code_ext}"
+        write_result = await self.write_file(script_path, code)
+        if not write_result["success"]:
+            return {
+                "success": False,
+                "stdout": "",
+                "stderr": write_result.get("error", ""),
+                "exit_code": 1,
+                "error": write_result.get("error"),
+            }
+        result = await self._exec([self._config.code_runner, script_path])
+        await self._exec(["/bin/sh", "-c", f"rm -f '{script_path}'"])
         return result
 
 
@@ -127,86 +134,104 @@ class Sandbox:
         """
         return await self._exec(["/bin/sh", "-c", cmd])
 
-    
+
     async def write_file(self, path: str, content: str) -> dict:
-        """Write a text file into the sandbox (path must be under /workspace).
+        """Write (overwrite) a text file at the given path inside the container.
 
         Returns dict with keys: success, path, error.
         """
         try:
-            host_path = self._to_host_path(path)
-            host_path.parent.mkdir(parents=True, exist_ok=True)
-            host_path.write_text(content, encoding="utf-8")
+            encoded = base64.b64encode(content.encode()).decode()
+            dir_path = str(Path(path).parent)
+            result = await self._exec([
+                "/bin/sh", "-c",
+                f"mkdir -p '{dir_path}' && echo '{encoded}' | base64 -d > '{path}'",
+            ])
+            if not result["success"]:
+                return {"success": False, "path": path, "error": result.get("stderr", "write failed")}
             return {"success": True, "path": path, "error": None}
         except Exception as e:
             return {"success": False, "path": path, "error": str(e)}
-        
+
+
+    async def read_file(self, path: str) -> dict:
+        """Read a text file from inside the container.
+
+        Returns dict with keys: success, path, content, error.
+        """
+        result = await self._exec(["/bin/sh", "-c", f"cat '{path}'"])
+        if not result["success"]:
+            return {"success": False, "path": path, "content": None, "error": result.get("stderr")}
+        return {"success": True, "path": path, "content": result["stdout"], "error": None}
+
 
     async def append_file(self, path: str, content: str) -> dict:
-        """Append content to the end of a file (creates the file if it doesn't exist).
+        """Append text to the end of a file (creates it if it does not exist).
 
         Returns dict with keys: success, path, error.
         """
         try:
-            host_path = self._to_host_path(path)
-            host_path.parent.mkdir(parents=True, exist_ok=True)
-            with host_path.open("a", encoding="utf-8") as f:
-                f.write(content)
+            encoded = base64.b64encode(content.encode()).decode()
+            dir_path = str(Path(path).parent)
+            result = await self._exec([
+                "/bin/sh", "-c",
+                f"mkdir -p '{dir_path}' && echo '{encoded}' | base64 -d >> '{path}'",
+            ])
+            if not result["success"]:
+                return {"success": False, "path": path, "error": result.get("stderr", "append failed")}
             return {"success": True, "path": path, "error": None}
         except Exception as e:
             return {"success": False, "path": path, "error": str(e)}
-        
+
 
     async def edit_file(self, path: str, old_str: str, new_str: str) -> dict:
         """Replace the first occurrence of old_str with new_str inside a file.
 
-        Covers all targeted edit cases:
-          - Change:  old_str="x = 1",      new_str="x = 2"
-          - Remove:  old_str="x = 1\\n",   new_str=""
-          - Insert:  old_str="def foo():", new_str="def foo():\\n    # added"
-
         Returns dict with keys: success, path, replaced, error.
         `replaced` is False when old_str was not found (file left unchanged).
         """
-        try:
-            host_path = self._to_host_path(path)
-            original = host_path.read_text(encoding="utf-8")
-            if old_str not in original:
-                return {"success": False, "path": path, "replaced": False, "error": f"old_str not found in {path}"}
-            host_path.write_text(original.replace(old_str, new_str, 1), encoding="utf-8")
-            return {"success": True, "path": path, "replaced": True, "error": None}
-        except Exception as e:
-            return {"success": False, "path": path, "replaced": False, "error": str(e)}
-        
+        read_result = await self.read_file(path)
+        if not read_result["success"]:
+            return {"success": False, "path": path, "replaced": False, "error": read_result["error"]}
 
-    async def read_file(self, path: str) -> dict:
-        """Read a text file from inside the sandbox.
+        content = read_result["content"]
+        if old_str not in content:
+            return {"success": False, "path": path, "replaced": False, "error": f"old_str not found in {path}"}
 
-        Returns dict with keys: success, path, content, error.
-        """
-        try:
-            content = self._to_host_path(path).read_text(encoding="utf-8")
-            return {"success": True, "path": path, "content": content, "error": None}
-        except Exception as e:
-            return {"success": False, "path": path, "content": None, "error": str(e)}
-        
+        write_result = await self.write_file(path, content.replace(old_str, new_str, 1))
+        if not write_result["success"]:
+            return {"success": False, "path": path, "replaced": False, "error": write_result["error"]}
+
+        return {"success": True, "path": path, "replaced": True, "error": None}
+
 
     async def list_files(self, path: str = "/workspace") -> dict:
-        """List files in a sandbox directory.
+        """List files and directories inside a container directory.
 
         Returns dict with keys: success, path, files, error.
         Each entry in files has keys: name, type ('file' or 'directory').
         """
         try:
-            entries = [
-                {"name": e.name, "type": "directory" if e.is_dir() else "file"}
-                for e in sorted(self._to_host_path(path).iterdir())
-            ]
+            result = await self._exec([
+                "/bin/sh", "-c",
+                f"find '{path}' -maxdepth 1 -mindepth 1 -printf '%f\\t%y\\n' | sort",
+            ])
+            if not result["success"]:
+                return {"success": False, "path": path, "files": [], "error": result.get("stderr")}
+
+            entries = []
+            for line in result["stdout"].strip().split("\n"):
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) == 2:
+                    name, ftype = parts
+                    entries.append({"name": name, "type": "directory" if ftype == "d" else "file"})
+
             return {"success": True, "path": path, "files": entries, "error": None}
         except Exception as e:
             return {"success": False, "path": path, "files": [], "error": str(e)}
 
-    
 
     async def _exec(self, cmd: list[str]) -> dict:
         exit_code, output = await asyncio.to_thread(
@@ -224,5 +249,9 @@ class Sandbox:
         }
 
     def _to_host_path(self, container_path: str) -> Path:
+        """Translate a /workspace container path to the host-side temp directory.
+        Available for use when the volume mount is active.
+        Currently it's not used and must keep it.
+        """
         rel = container_path.removeprefix("/workspace").lstrip("/")
         return Path(self._workdir) / rel
