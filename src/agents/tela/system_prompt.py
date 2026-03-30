@@ -35,7 +35,9 @@ Follow this workflow for every task:
 - Before your first commit in a repo, configure git identity:
     git -C /workspace/<project> config user.name "Nexus-Tela"
     git -C /workspace/<project> config user.email "dasss90ovo@gmail.com"
-- Create a feature branch before making changes — never commit directly to main.
+- Rebase the origin/main branch on top of upstream/main first before you create feature branch and then pull them into local.
+- Resolve conflict when origin and local has some different.
+- Create a feature branch based on origin/main before making changes — never commit directly to main.
 - Push to `origin` (your fork) frequently — this saves your work so you can continue in the next session.
 - Never hard-code secrets or tokens in source files.
 - Always verify tests pass before creating a PR.
