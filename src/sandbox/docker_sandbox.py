@@ -58,7 +58,7 @@ NODE_18    = SandboxConfig("node:18-slim",  "node", ".js")
 NODE_20    = SandboxConfig("node:20-slim",  "node", ".js")
 NODE_22    = SandboxConfig("node:22-slim",  "node", ".js")
 
-VITE_REACT_TS = SandboxConfig("node:20-slim", "tsx", ".ts", mem_limit="512m", init_commands=(_NODE_REACT_SETUP,))
+VITE_REACT_TS = SandboxConfig("node:20-slim", "tsx", ".ts", mem_limit="512m", init_commands=(_NODE_REACT_SETUP, _GIT_INSTALL))
 
 # eclipse-temurin ships a proper JDK; java <File>.java works since Java 11
 # JVM requires more headroom than Python/Node
