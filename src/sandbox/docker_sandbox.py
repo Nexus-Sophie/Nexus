@@ -2,11 +2,19 @@ import asyncio
 import base64
 import tempfile
 import shutil
+from typing import Literal
 from dataclasses import dataclass
 from pathlib import Path
 
 import docker
 
+from src.logger import logger
+
+@dataclass
+class CommandConfig:
+    name: str
+    command: str
+    type: Literal["install", "env", "other_shell"]
 
 @dataclass(frozen=True)
 class SandboxConfig:
@@ -32,10 +40,10 @@ class SandboxConfig:
     code_runner: str            # executable used by run_code(), e.g. "python", "node", "java"
     code_ext: str               # file extension for the temp script, e.g. ".py", ".js", ".java"
     mem_limit: str = "128m"    # Docker memory limit; JVM needs at least 256m
-    init_commands: tuple[str, ...] = ()  # shell commands run once after the container starts
+    init_commands: tuple[CommandConfig, ...] = ()  # shell commands run once after the container starts
 
 
-_GIT_INSTALL = "apt-get install -y --no-install-recommends git"
+_GIT_INSTALL = CommandConfig(name="git", command="apt-get update && apt-get install -y --no-install-recommends git", type="install")
 
 PYTHON_310 = SandboxConfig("python:3.10-slim", "python", ".py", init_commands=(_GIT_INSTALL,))
 PYTHON_311 = SandboxConfig("python:3.11-slim", "python", ".py", init_commands=(_GIT_INSTALL,))
@@ -100,7 +108,11 @@ class Sandbox:
             working_dir="/workspace",
         )
         for cmd in self._config.init_commands:
-            await self.run_shell(cmd)
+            if cmd.type == "install":
+                logger.info(f"Installing {cmd.name}")
+            else:
+                logger.info(f"Initializing {cmd.name}")
+            await self.run_shell(cmd.command)
         return self
 
 
