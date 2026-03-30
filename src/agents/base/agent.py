@@ -4,7 +4,7 @@ import json
 from typing import Literal, Any, List, Dict, Callable, Coroutine, TypedDict, Required
 from dataclasses import dataclass
 from pydantic import BaseModel, ConfigDict, model_validator
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 from openai.types.chat.chat_completion_message_param import (
     ChatCompletionMessageParam, 
     ChatCompletionSystemMessageParam, 
@@ -110,9 +110,15 @@ class Agent(BaseModel):
         )
 
         while not terminate and (True if self.max_attempts is None else tries <= self.max_attempts):
+            try:
+                step_response: BaseAgentStepResult = self.step(current_turn_ctx)
+            except RateLimitError as rle:
+                logger.warning(f"Agent `{self.name}` requests {self.llm_config.model} to limit. Wait one minute")
+                await asyncio.sleep(60)
+                continue
+            
             tries += 1
-
-            step_response: BaseAgentStepResult = self.step(current_turn_ctx)
+        
             assistant_msg = step_response.message_param
             current_turn_ctx.append(assistant_msg)
 
