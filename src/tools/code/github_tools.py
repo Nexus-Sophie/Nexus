@@ -1,6 +1,7 @@
 import httpx
 from pydantic import BaseModel, Field
 from openai import pydantic_function_tool
+from mwin import track, StepType
 
 from src.sandbox import Sandbox
 
@@ -188,6 +189,7 @@ class GithubToolKit:
     def __init__(self, sandbox: Sandbox) -> None:
         self._sandbox = sandbox
 
+    @track(StepType=StepType.TOOL)
     async def fetch_from_github(
         self,
         repo_url: str,
@@ -232,6 +234,8 @@ class GithubToolKit:
             }
         return {"success": True, "path": local_path, "branch": branch, "message": message}
 
+
+    @track(StepType=StepType.TOOL)
     async def create_github_issue(
         self,
         token: str,
@@ -268,6 +272,8 @@ class GithubToolKit:
                     "message": f"GitHub API error {e.response.status_code}: {error_detail}",
                 }
 
+
+    @track(StepType=StepType.TOOL)
     async def pr_to_github(
         self,
         token: str,
@@ -329,6 +335,7 @@ class GithubToolKit:
     # Issue and PR Comment/Review Interaction Methods
     # ==========================================================================
 
+    @track(StepType=StepType.TOOL)
     async def get_issue_comments(
         self,
         token: str,
@@ -375,6 +382,8 @@ class GithubToolKit:
                     "message": f"GitHub API error {e.response.status_code}: {error_detail}",
                 }
 
+
+    @track(StepType=StepType.TOOL)
     async def reply_to_issue(
         self,
         token: str,
@@ -410,6 +419,8 @@ class GithubToolKit:
                     "message": f"GitHub API error {e.response.status_code}: {error_detail}",
                 }
 
+
+    @track(StepType=StepType.TOOL)
     async def get_pr_reviews(
         self,
         token: str,
@@ -454,6 +465,8 @@ class GithubToolKit:
                     "message": f"GitHub API error {e.response.status_code}: {error_detail}",
                 }
 
+
+    @track(StepType=StepType.TOOL)
     async def get_pr_review_comments(
         self,
         token: str,
@@ -501,6 +514,8 @@ class GithubToolKit:
                     "message": f"GitHub API error {e.response.status_code}: {error_detail}",
                 }
 
+
+    @track(StepType=StepType.TOOL)
     async def reply_to_pr_review_comment(
         self,
         token: str,
@@ -540,6 +555,8 @@ class GithubToolKit:
                     "message": f"GitHub API error {e.response.status_code}: {error_detail}",
                 }
 
+
+    @track(StepType=StepType.TOOL)
     async def get_pr_comments(
         self,
         token: str,
@@ -585,6 +602,8 @@ class GithubToolKit:
                     "message": f"GitHub API error {e.response.status_code}: {error_detail}",
                 }
 
+
+    @track(StepType=StepType.TOOL)
     async def reply_to_pr(
         self,
         token: str,
@@ -596,6 +615,8 @@ class GithubToolKit:
         # PR comments use the same endpoint as issue comments
         return await self.reply_to_issue(token, repo, pull_number, body)
 
+
+    @track(StepType=StepType.TOOL)
     async def get_my_open_prs(
         self,
         token: str,
@@ -648,6 +669,8 @@ class GithubToolKit:
                     "message": f"GitHub API error {e.response.status_code}: {error_detail}",
                 }
 
+
+    @track(StepType=StepType.TOOL)
     async def get_my_issues(
         self,
         token: str,
@@ -702,6 +725,8 @@ class GithubToolKit:
                     "message": f"GitHub API error {e.response.status_code}: {error_detail}",
                 }
 
+
+    @track(StepType=StepType.TOOL)
     async def get_notifications(
         self,
         token: str,

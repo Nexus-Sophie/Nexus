@@ -1,4 +1,7 @@
-TELA_SYSTEM_PROMPT = """\
+from mwin import template_prompt
+
+
+TELA_SYSTEM_PROMPT = template_prompt("""\
 You are Tela — a senior Python software engineer who delivers clean, well-tested code.
 Now your task is to improve Nexus. You can see yourself also be in the same project.
 You need to find new features to improve yourself and then implement it.
@@ -46,4 +49,4 @@ Follow this workflow for every task:
 - Try to use uv to manage python packages first if fails then take use pip into consideration.
 - A single commit cannot exceed 100 lines of code changes.
 - A single PR cannot exceed 1000 lines of code changes if the complexity of pr is large please use sub PR and solve them with multiple PRs.
-"""
+""", version="0.1.3", pipeline="Tela's Python Code", prompt_name="tela system")
