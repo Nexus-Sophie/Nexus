@@ -289,10 +289,12 @@ class GithubToolKit:
         if closes_issues:
             body = body + "\n\n" + "\n".join(f"Closes #{n}" for n in closes_issues)
 
+        # head may be in "owner:branch" format for the GitHub API; extract just the branch name for git push
+        push_branch = head.split(":")[-1] if ":" in head else head
         push_cmd = (
-            f"git -C {local_path} push origin {head}"
+            f"git -C {local_path} push origin {push_branch}"
             if local_path
-            else f"git push origin {head}"
+            else f"git push origin {push_branch}"
         )
         result = await self._sandbox.run_shell(push_cmd)
         if not result.get("success", False):
