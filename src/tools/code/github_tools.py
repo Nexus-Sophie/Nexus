@@ -1,9 +1,9 @@
-﻿import httpx
+import httpx
 from pydantic import BaseModel, Field
 from openai import pydantic_function_tool
 from mwin import track, StepType
 
-from src.sandbox import Sandbox, canonicalize_repo_url
+from src.sandbox import Sandbox
 
 
 class FetchFromGithub(BaseModel):
@@ -203,7 +203,7 @@ class GithubToolKit:
         """
 
         authenticated_url = repo_url
-        expected_repo_url = canonicalize_repo_url(repo_url)
+        expected_repo_url = repo_url
         result: dict | None = None
         message = ""
 
@@ -216,7 +216,7 @@ class GithubToolKit:
                 f"git -C '{local_path}' config --get remote.origin.url"
             )
             existing_remote = remote_result.get("stdout", "").strip()
-            existing_remote_canonical = canonicalize_repo_url(existing_remote)
+            existing_remote_canonical = existing_remote
 
             remote_missing = not remote_result.get("success", False) or not existing_remote
             remote_mismatch = (
@@ -818,6 +818,7 @@ class GithubToolKit:
                     "notifications": [],
                     "message": f"GitHub API error {e.response.status_code}: {error_detail}",
                 }
+
 
 
 
