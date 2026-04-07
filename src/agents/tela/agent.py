@@ -1,4 +1,4 @@
-﻿from typing import List, Any
+from typing import List, Any
 
 import httpx
 from pydantic import PrivateAttr, ConfigDict
@@ -185,22 +185,6 @@ class Tela(Agent):
         return "Tela reached the maximum number of attempts without completing the task."
 
 
-    @track(tags=["compact", "tela"], step_type=StepType.LLM)
-    def compact(self, current_turn_ctx: List[ChatCompletionMessageParam]) -> List[ChatCompletionMessageParam]:
-        """Keep system message + first user message + last 10 messages."""
-        if len(current_turn_ctx) <= 12:
-            return current_turn_ctx
-        system_msg = current_turn_ctx[0]
-        first_user = next(
-            (m for m in current_turn_ctx[1:] if isinstance(m, dict) and m.get("role") == "user"),
-            None,
-        )
-        recent = current_turn_ctx[-10:]
-        result: List[ChatCompletionMessageParam] = [system_msg]
-        if first_user and first_user not in recent:
-            result.append(first_user)
-        result.extend(recent)
-        return result
 
 
     @classmethod
