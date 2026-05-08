@@ -113,7 +113,7 @@ def test_build_github_login_url(monkeypatch: pytest.MonkeyPatch) -> None:
     assert url.startswith("https://github.com/login/oauth/authorize")
     assert "client_id=test-client-id" in url
     assert "state=random-state" in url
-    assert "scope=read:user user:email" in url
+    assert "scope=read%3Auser+user%3Aemail" in url
 
 
 def test_build_github_login_url_missing_config(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -125,8 +125,8 @@ def test_build_github_login_url_missing_config(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_get_agent_price_known() -> None:
-    assert get_agent_price("tela") == "5500"
-    assert get_agent_price("sophie") == "6000"
+    assert get_agent_price("tela") == Decimal("5500")
+    assert get_agent_price("sophie") == Decimal("6000")
 
 
 def test_get_agent_price_unknown() -> None:
@@ -484,5 +484,50 @@ def test_buy_agent_returns_401_without_auth() -> None:
     response = asyncio.run(run_request())
     assert response.status_code == 401
 
+
+
+def test_buy_agent_creates_subscription_after_atomic_deduction(monkeypatch: pytest.MonkeyPatch) -> None:
+    user = _make_user(balance=Decimal("10000.0000"))
+    subscription = SimpleNamespace(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        agent=AgentName.tela,
+        started_at=datetime.now(timezone.utc),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        created_at=datetime.now(timezone.utc),
+    )
+    calls: list[tuple[str, Any]] = []
+
+    def fake_verify(token: str) -> uuid.UUID | None:
+        return user.id
+
+    async def fake_get_by_id(session, user_id: uuid.UUID) -> Any | None:
+        return user
+
+    async def fake_deduct_balance(session, user_id: uuid.UUID, amount: Any) -> Any | None:
+        calls.append(("deduct", amount))
+        return user
+
+    async def fake_create_sub(session, **kwargs) -> Any:
+        calls.append(("create", kwargs.get("commit")))
+        return subscription
+
+    monkeypatch.setattr(auth_module, "verify_access_token", fake_verify)
+    monkeypatch.setattr(UserRepository, "get_by_id", fake_get_by_id)
+    monkeypatch.setattr(UserRepository, "deduct_balance", fake_deduct_balance)
+    monkeypatch.setattr(UserAgentSubscriptionRepository, "create", fake_create_sub)
+
+    async def run_request() -> httpx.Response:
+        transport = httpx.ASGITransport(app=_build_app())
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            return await client.post(
+                "/v1/auth/buy-agent",
+                headers={"Authorization": "Bearer valid-token"},
+                json={"agent": "tela", "months": 1},
+            )
+
+    response = asyncio.run(run_request())
+    assert response.status_code == 200
+    assert calls == [("deduct", Decimal("5500")), ("create", False)]
 
 
