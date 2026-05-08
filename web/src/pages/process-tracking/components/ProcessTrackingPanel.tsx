@@ -135,7 +135,8 @@ export function ProcessTrackingPanel({
                   <DialogHeader>
                     <DialogTitle>Select a task</DialogTitle>
                     <DialogDescription>
-                      Choose the task you want to consult about for this agent.
+                      Choose the running task you want to consult about for this
+                      agent.
                     </DialogDescription>
                   </DialogHeader>
                   <ScrollArea className="max-h-[420px] -mx-1">
@@ -184,10 +185,10 @@ export function ProcessTrackingPanel({
 
               <p className="text-xs text-muted-foreground">
                 {hasTasks
-                  ? `${tasksForAgent.length} task${
+                  ? `${tasksForAgent.length} running task${
                       tasksForAgent.length === 1 ? "" : "s"
                     } available`
-                  : "No tasks available for the selected agent."}
+                  : "No running tasks available for the selected agent."}
               </p>
             </div>
           </div>
@@ -210,7 +211,7 @@ export function ProcessTrackingPanel({
             >
               {selectedTask?.question ?? (
                 <span className="font-normal text-muted-foreground">
-                  No task selected
+                  No running task selected
                 </span>
               )}
             </CardTitle>

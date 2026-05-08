@@ -6,7 +6,7 @@ import { useProcessTracking } from './hooks/useProcessTracking';
 export default function ProcessTrackingPage() {
   useAppLayout({
     title: 'Process Tracking',
-    description: 'Select an agent and task, then ask for the latest process.',
+    description: 'Select an agent and running task, then ask for the latest process.',
     mainClassName: 'overflow-hidden p-0',
   });
 

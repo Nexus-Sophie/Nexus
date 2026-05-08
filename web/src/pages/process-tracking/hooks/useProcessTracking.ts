@@ -43,7 +43,11 @@ export function useProcessTracking({
   const tasksForSelectedAgent = useMemo(
     () =>
       sortTaskViewsByNewest(
-        taskViews.filter(task => task.agentInstanceId === selectedAgentId),
+        taskViews.filter(
+          task =>
+            task.agentInstanceId === selectedAgentId &&
+            task.status === 'running',
+        ),
       ),
     [selectedAgentId, taskViews],
   );
