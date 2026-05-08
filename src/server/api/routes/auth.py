@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -32,7 +33,7 @@ router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
 
 @router.get("/github/login")
-async def github_login(request: Request, state: str = Query(default="")) -> dict[str, str]:
+async def github_login(state: str = Query(default="")) -> dict[str, str]:
     """Return the GitHub OAuth authorization URL."""
     try:
         url = build_github_login_url(state)
@@ -93,8 +94,6 @@ async def recharge(
     current_user: UserRecord = Depends(get_current_user),
 ) -> UserResponse:
     """Recharge the current user's balance."""
-    from decimal import Decimal
-
     amount = Decimal(payload.amount)
     database: Database = request.app.state.database
     async with database.session() as session:
@@ -111,10 +110,8 @@ async def buy_agent(
     current_user: UserRecord = Depends(get_current_user),
 ) -> UserAgentSubscriptionResponse:
     """Purchase an agent subscription for the current user."""
-    from decimal import Decimal
-
     try:
-        price = Decimal(get_agent_price(payload.agent.value))
+        price = get_agent_price(payload.agent.value)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -132,10 +129,15 @@ async def buy_agent(
 
         subscription = await UserAgentSubscriptionRepository.create(
             session,
-            user_id=current_user.id,
+            user_id=user.id,
             agent=AgentName(payload.agent.value),
             started_at=started_at,
             expires_at=expires_at,
+            commit=False,
         )
+        if hasattr(session, "commit"):
+            await session.commit()
+        if hasattr(session, "refresh"):
+            await session.refresh(subscription)
 
     return UserAgentSubscriptionResponse.from_record(subscription)

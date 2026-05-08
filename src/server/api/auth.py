@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 import jwt
@@ -19,9 +21,9 @@ _GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 _GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 _GITHUB_USER_URL = "https://api.github.com/user"
 
-_AGENT_PRICES: dict[str, Any] = {
-    "tela": "5500",
-    "sophie": "6000",
+_AGENT_PRICES: dict[str, Decimal] = {
+    "tela": Decimal("5500"),
+    "sophie": Decimal("6000"),
 }
 
 
@@ -59,12 +61,13 @@ def build_github_login_url(state: str) -> str:
     settings = get_settings()
     if not settings.github_oauth_client_id:
         raise RuntimeError("NEXUS_GITHUB_OAUTH_CLIENT_ID is not configured")
-    params = {
-        "client_id": settings.github_oauth_client_id,
-        "scope": "read:user user:email",
-        "state": state,
-    }
-    query = "&".join(f"{k}={v}" for k, v in params.items())
+    query = urlencode(
+        {
+            "client_id": settings.github_oauth_client_id,
+            "scope": "read:user user:email",
+            "state": state,
+        }
+    )
     return f"{_GITHUB_AUTHORIZE_URL}?{query}"
 
 
@@ -118,7 +121,7 @@ async def get_current_user(request: Request) -> UserRecord:
     return user
 
 
-def get_agent_price(agent: str) -> Any:
+def get_agent_price(agent: str) -> Decimal:
     price = _AGENT_PRICES.get(agent)
     if price is None:
         raise ValueError(f"Unknown agent: {agent}")

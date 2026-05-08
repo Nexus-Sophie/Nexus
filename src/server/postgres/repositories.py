@@ -1180,15 +1180,24 @@ class UserRepository:
         user_id: uuid.UUID,
         amount: Any,
     ) -> UserRecord | None:
-        user = await session.get(UserRecord, user_id)
+        stmt = (
+            update(UserRecord)
+            .where(
+                UserRecord.id == user_id,
+                UserRecord.balance >= amount,
+            )
+            .values(
+                balance=UserRecord.balance - amount,
+                updated_at=utc_now(),
+            )
+            .returning(UserRecord)
+        )
+        result: CursorResult[Any] = cast(CursorResult[Any], await session.execute(stmt))
+        user = result.scalar_one_or_none()
         if user is None:
+            await session.rollback()
             return None
-        if user.balance < amount:
-            return None
-        user.balance = user.balance - amount
-        user.updated_at = utc_now()
         await session.commit()
-        await session.refresh(user)
         return user
 
 
@@ -1201,6 +1210,7 @@ class UserAgentSubscriptionRepository:
         agent: AgentName,
         started_at: datetime,
         expires_at: datetime,
+        commit: bool = True,
     ) -> UserAgentSubscriptionRecord:
         sub = UserAgentSubscriptionRecord(
             user_id=user_id,
@@ -1209,8 +1219,12 @@ class UserAgentSubscriptionRepository:
             expires_at=expires_at,
         )
         session.add(sub)
-        await session.commit()
-        await session.refresh(sub)
+        if commit:
+            await session.commit()
+            await session.refresh(sub)
+            return sub
+
+        await session.flush()
         return sub
 
     @staticmethod
