@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Enum,
@@ -84,6 +85,19 @@ class VirtualPullRequestThreadStatus(str, enum.Enum):
 class VirtualPullRequestLineSide(str, enum.Enum):
     old = "old"
     new = "new"
+
+
+class GithubPullRequestFeedbackKind(str, enum.Enum):
+    pr_comment = "pr_comment"
+    pr_review = "pr_review"
+    pr_review_comment = "pr_review_comment"
+
+
+class GithubPullRequestFeedbackStatus(str, enum.Enum):
+    pending = "pending"
+    processing = "processing"
+    processed = "processed"
+    ignored = "ignored"
 
 
 class Base(DeclarativeBase):
@@ -194,6 +208,11 @@ class TaskRecord(Base):
     checkpoint: Mapped[list[ChatCompletionMessageParam] | None] = mapped_column(JSON, nullable=True)
     dispatch_token: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    resume_status: Mapped[TaskStatus | None] = mapped_column(
+        Enum(TaskStatus, native_enum=False, length=TASK_STATUS_VARCHAR_LENGTH),
+        nullable=True,
+        index=True,
+    )
     status: Mapped[TaskStatus] = mapped_column(
         Enum(TaskStatus, native_enum=False, length=TASK_STATUS_VARCHAR_LENGTH),
         nullable=False,
@@ -422,6 +441,66 @@ class VirtualPullRequestCommentRecord(Base):
     )
     author: Mapped[str | None] = mapped_column(String(255), nullable=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=func.now(),
+    )
+
+
+class GithubPullRequestFeedbackRecord(Base):
+    __tablename__ = "github_pull_request_feedback"
+    __table_args__ = (
+        UniqueConstraint(
+            "task_id",
+            "kind",
+            "external_id",
+            name="uq_github_pull_request_feedback_task_source",
+        ),
+        Index("ix_github_pull_request_feedback_task_status", "task_id", "status", "created_at"),
+        Index("ix_github_pull_request_feedback_pull_request", "pull_request_number", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("task.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    pull_request_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    kind: Mapped[GithubPullRequestFeedbackKind] = mapped_column(
+        Enum(GithubPullRequestFeedbackKind, native_enum=False, length=32),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[GithubPullRequestFeedbackStatus] = mapped_column(
+        Enum(GithubPullRequestFeedbackStatus, native_enum=False, length=32),
+        nullable=False,
+        index=True,
+        default=GithubPullRequestFeedbackStatus.pending,
+    )
+    external_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    author: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_state: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    original_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    commit_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    html_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    external_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    external_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ignored_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

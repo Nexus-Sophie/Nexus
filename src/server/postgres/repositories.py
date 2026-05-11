@@ -14,6 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.server.postgres.models import (
     AgentInstanceRecord,
     AgentName,
+    GithubPullRequestFeedbackKind,
+    GithubPullRequestFeedbackRecord,
+    GithubPullRequestFeedbackStatus,
     TaskRecord,
     TaskStatus,
     TaskWorkItemRecord,
@@ -330,6 +333,32 @@ class TaskRepository:
         return list(result.scalars().all())
 
     @staticmethod
+    async def list_external_pull_request_candidates(
+        session: AsyncSession,
+        *,
+        limit: int = 200,
+    ) -> list[TaskRecord]:
+        query = (
+            select(TaskRecord)
+            .where(
+                TaskRecord.repo.is_not(None),
+                TaskRecord.external_pull_request_url.is_not(None),
+                TaskRecord.status.in_(
+                    [
+                        TaskStatus.queued,
+                        TaskStatus.running,
+                        TaskStatus.waiting_for_review,
+                        TaskStatus.waiting_for_merge,
+                    ]
+                ),
+            )
+            .order_by(TaskRecord.updated_at.asc(), TaskRecord.created_at.asc())
+            .limit(limit)
+        )
+        result = await session.execute(query)
+        return list(result.scalars().all())
+
+    @staticmethod
     async def list_review_queue(
         session: AsyncSession,
         *,
@@ -568,6 +597,51 @@ class TaskRepository:
         return task
 
     @staticmethod
+    async def queue_github_feedback(
+        session: AsyncSession,
+        task_id: uuid.UUID,
+    ) -> TaskRecord | None:
+        task = await session.get(TaskRecord, task_id)
+        if task is None:
+            return None
+        if task.status not in {TaskStatus.waiting_for_review, TaskStatus.waiting_for_merge}:
+            return None
+
+        now = utc_now()
+        task.resume_status = task.status
+        task.status = TaskStatus.queued
+        task.error = None
+        task.finished_at = None
+        task.dispatch_token = None
+        task.lease_expires_at = None
+        task.updated_at = now
+        await session.commit()
+        await session.refresh(task)
+        return task
+
+    @staticmethod
+    async def restore_github_feedback_dispatch(
+        session: AsyncSession,
+        task_id: uuid.UUID,
+        *,
+        error: str | None = None,
+    ) -> TaskRecord | None:
+        task = await session.get(TaskRecord, task_id)
+        if task is None:
+            return None
+
+        task.status = task.resume_status or TaskStatus.waiting_for_review
+        task.resume_status = None
+        task.error = error
+        task.finished_at = None
+        task.dispatch_token = None
+        task.lease_expires_at = None
+        task.updated_at = utc_now()
+        await session.commit()
+        await session.refresh(task)
+        return task
+
+    @staticmethod
     async def set_waiting_for_review(
         session: AsyncSession,
         task_id: uuid.UUID,
@@ -583,6 +657,7 @@ class TaskRepository:
         task.result = result
         task.error = None
         task.finished_at = None
+        task.resume_status = None
         task.updated_at = now
         task.dispatch_token = None
         task.lease_expires_at = None
@@ -606,6 +681,7 @@ class TaskRepository:
         task.result = result
         task.error = None
         task.finished_at = None
+        task.resume_status = None
         task.updated_at = now
         task.dispatch_token = None
         task.lease_expires_at = None
@@ -626,6 +702,7 @@ class TaskRepository:
         task.status = TaskStatus.merged
         task.error = None
         task.finished_at = now
+        task.resume_status = None
         task.updated_at = now
         task.dispatch_token = None
         task.lease_expires_at = None
@@ -646,6 +723,7 @@ class TaskRepository:
         task.status = TaskStatus.closed
         task.error = None
         task.finished_at = now
+        task.resume_status = None
         task.updated_at = now
         task.dispatch_token = None
         task.lease_expires_at = None
@@ -668,6 +746,7 @@ class TaskRepository:
         task.status = TaskStatus.failed
         task.error = error
         task.finished_at = now
+        task.resume_status = None
         task.updated_at = now
         task.dispatch_token = None
         task.lease_expires_at = None
@@ -1148,3 +1227,196 @@ class VirtualPullRequestCommentRepository:
         )
         result = await session.execute(query)
         return list(result.scalars().all())
+
+
+class GithubPullRequestFeedbackRepository:
+    @staticmethod
+    async def upsert_discovered(
+        session: AsyncSession,
+        *,
+        task_id: uuid.UUID,
+        pull_request_number: int,
+        kind: GithubPullRequestFeedbackKind,
+        external_id: int,
+        status: GithubPullRequestFeedbackStatus,
+        author: str | None,
+        body: str | None,
+        review_state: str | None = None,
+        file_path: str | None = None,
+        line: int | None = None,
+        original_line: int | None = None,
+        commit_id: str | None = None,
+        html_url: str | None = None,
+        external_created_at: datetime | None = None,
+        external_updated_at: datetime | None = None,
+        ignored_reason: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> tuple[GithubPullRequestFeedbackRecord, bool]:
+        query = select(GithubPullRequestFeedbackRecord).where(
+            GithubPullRequestFeedbackRecord.task_id == task_id,
+            GithubPullRequestFeedbackRecord.kind == kind,
+            GithubPullRequestFeedbackRecord.external_id == external_id,
+        )
+        result = await session.execute(query)
+        record = result.scalar_one_or_none()
+        now = utc_now()
+
+        if record is None:
+            record = GithubPullRequestFeedbackRecord(
+                task_id=task_id,
+                pull_request_number=pull_request_number,
+                kind=kind,
+                status=status,
+                external_id=external_id,
+                author=author,
+                body=body,
+                review_state=review_state,
+                file_path=file_path,
+                line=line,
+                original_line=original_line,
+                commit_id=commit_id,
+                html_url=html_url,
+                external_created_at=external_created_at,
+                external_updated_at=external_updated_at,
+                ignored_reason=ignored_reason,
+                payload=payload,
+            )
+            session.add(record)
+            await session.commit()
+            await session.refresh(record)
+            return record, True
+
+        record.author = author
+        record.body = body
+        record.review_state = review_state
+        record.file_path = file_path
+        record.line = line
+        record.original_line = original_line
+        record.commit_id = commit_id
+        record.html_url = html_url
+        record.external_created_at = external_created_at
+        record.external_updated_at = external_updated_at
+        record.payload = payload
+        record.updated_at = now
+
+        if record.status in {
+            GithubPullRequestFeedbackStatus.pending,
+            GithubPullRequestFeedbackStatus.ignored,
+        }:
+            record.status = status
+            record.ignored_reason = ignored_reason
+            if status != GithubPullRequestFeedbackStatus.processed:
+                record.processed_at = None
+
+        await session.commit()
+        await session.refresh(record)
+        return record, False
+
+    @staticmethod
+    async def has_pending_for_task(
+        session: AsyncSession,
+        task_id: uuid.UUID,
+    ) -> bool:
+        query = (
+            select(GithubPullRequestFeedbackRecord.id)
+            .where(
+                GithubPullRequestFeedbackRecord.task_id == task_id,
+                GithubPullRequestFeedbackRecord.status == GithubPullRequestFeedbackStatus.pending,
+            )
+            .limit(1)
+        )
+        result = await session.execute(query)
+        return result.scalar_one_or_none() is not None
+
+    @staticmethod
+    async def has_pending_newer_than(
+        session: AsyncSession,
+        task_id: uuid.UUID,
+        *,
+        cutoff: datetime,
+    ) -> bool:
+        query = (
+            select(GithubPullRequestFeedbackRecord.id)
+            .where(
+                GithubPullRequestFeedbackRecord.task_id == task_id,
+                GithubPullRequestFeedbackRecord.status == GithubPullRequestFeedbackStatus.pending,
+                GithubPullRequestFeedbackRecord.created_at > cutoff,
+            )
+            .limit(1)
+        )
+        result = await session.execute(query)
+        return result.scalar_one_or_none() is not None
+
+    @staticmethod
+    async def claim_pending_by_task(
+        session: AsyncSession,
+        task_id: uuid.UUID,
+        *,
+        limit: int = 20,
+    ) -> list[GithubPullRequestFeedbackRecord]:
+        query = (
+            select(GithubPullRequestFeedbackRecord)
+            .where(
+                GithubPullRequestFeedbackRecord.task_id == task_id,
+                GithubPullRequestFeedbackRecord.status == GithubPullRequestFeedbackStatus.pending,
+            )
+            .order_by(
+                GithubPullRequestFeedbackRecord.external_created_at.asc(),
+                GithubPullRequestFeedbackRecord.created_at.asc(),
+            )
+            .limit(limit)
+        )
+        result = await session.execute(query)
+        records = list(result.scalars().all())
+        if not records:
+            return []
+
+        now = utc_now()
+        for record in records:
+            record.status = GithubPullRequestFeedbackStatus.processing
+            record.ignored_reason = None
+            record.updated_at = now
+
+        await session.commit()
+        return records
+
+    @staticmethod
+    async def mark_processed(
+        session: AsyncSession,
+        feedback_ids: list[uuid.UUID],
+    ) -> None:
+        if not feedback_ids:
+            return
+
+        now = utc_now()
+        query = select(GithubPullRequestFeedbackRecord).where(
+            GithubPullRequestFeedbackRecord.id.in_(feedback_ids)
+        )
+        result = await session.execute(query)
+        records = list(result.scalars().all())
+        for record in records:
+            record.status = GithubPullRequestFeedbackStatus.processed
+            record.processed_at = now
+            record.updated_at = now
+            record.ignored_reason = None
+        await session.commit()
+
+    @staticmethod
+    async def requeue_processing(
+        session: AsyncSession,
+        feedback_ids: list[uuid.UUID],
+    ) -> None:
+        if not feedback_ids:
+            return
+
+        now = utc_now()
+        query = select(GithubPullRequestFeedbackRecord).where(
+            GithubPullRequestFeedbackRecord.id.in_(feedback_ids)
+        )
+        result = await session.execute(query)
+        records = list(result.scalars().all())
+        for record in records:
+            record.status = GithubPullRequestFeedbackStatus.pending
+            record.processed_at = None
+            record.updated_at = now
+        await session.commit()

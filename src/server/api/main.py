@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from src.logger import logger
 from src.server.api.routes import agent_instances_router, tasks_router
 from src.server.config import get_settings
+from src.server.github_feedback import GithubFeedbackPoller
 from src.server.postgres.database import Database
 from src.server.redis.client import RedisClient
 from src.server.runner import AgentTaskRunner
@@ -30,18 +31,26 @@ async def lifespan(app: FastAPI):
         settings=settings,
         database=database,
     )
+    github_feedback_poller = GithubFeedbackPoller(
+        settings=settings,
+        database=database,
+        runner=runner,
+    )
 
     app.state.database = database
     app.state.redis_client = redis_client
     app.state.runner = runner
+    app.state.github_feedback_poller = github_feedback_poller
 
     recovered_count = await runner.recover_unfinished_tasks()
     if recovered_count:
         logger.warning("Startup recovery scheduled %s unfinished tasks.", recovered_count)
+    github_feedback_poller.start()
 
     try:
         yield
     finally:
+        await github_feedback_poller.stop()
         await runner.shutdown()
         await redis_client.close()
         await database.disconnect()

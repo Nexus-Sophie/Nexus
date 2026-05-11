@@ -13,9 +13,17 @@ from src.agents.base.agent import Agent, BaseAgentResponse, WorkTempStatus
 from src.logger import logger
 from src.server.config import Settings, get_settings
 from src.server.postgres.database import Database
-from src.server.postgres.models import TaskRecord, TaskWorkItemRecord, TaskWorkItemStatus
+from src.server.postgres.models import (
+    GithubPullRequestFeedbackKind,
+    GithubPullRequestFeedbackRecord,
+    TaskRecord,
+    TaskStatus,
+    TaskWorkItemRecord,
+    TaskWorkItemStatus,
+)
 from src.server.postgres.repositories import (
     AgentInstanceRepository,
+    GithubPullRequestFeedbackRepository,
     TaskRepository,
     TaskWorkItemRepository,
     VirtualPullRequestRepository,
@@ -165,8 +173,8 @@ async def execute_agent_task(
             recovered=recovered,
         )
 
-        await _mark_waiting_for_review(database, task_id, None)
-        logger.info("Task %s moved to waiting_for_review.", task_id)
+        await _mark_post_execution_wait_state(database, task_id, None)
+        logger.info("Task %s returned to its waiting state.", task_id)
 
     except Exception as exc:
         logger.exception("Task %s failed in worker", task_id)
@@ -215,12 +223,38 @@ async def _run_agent_workflow(
         agent.set_nexus_task_context(nexus_context)
 
     async with agent:
+        checkpoint: list[ChatCompletionMessageParam] = await _get_latest_checkpoint(database, task.id)
+        claimed_feedback = await _claim_pending_github_feedback(
+            database,
+            task.id,
+            limit=getattr(settings, "github_feedback_batch_size", 20),
+        )
+        if claimed_feedback:
+            logger.info(
+                "Task %s is resuming from checkpoint to process %s GitHub feedback item(s).",
+                task.id,
+                len(claimed_feedback),
+            )
+            nexus_context.current_work_item_id = None
+            try:
+                await _run_agent(
+                    agent=agent,
+                    question=_build_github_feedback_prompt(task, claimed_feedback),
+                    checkpoint=checkpoint,
+                    on_progress=on_progress,
+                )
+            except Exception:
+                await _requeue_github_feedback(database, claimed_feedback)
+                raise
+            await _mark_github_feedback_processed(database, claimed_feedback)
+            return
+
         while True:
             async with database.session() as session:
                 work_items = await TaskWorkItemRepository.list_by_task(session, task.id)
             # refresh to get the latest checkpoint
             # pass checkpoint whether the task is recovered or not.
-            checkpoint: list[ChatCompletionMessageParam] = await _get_latest_checkpoint(database, task.id)
+            checkpoint = await _get_latest_checkpoint(database, task.id)
 
             # first not work_items -> run once
             # agent maybe generate work_items also maybe not.
@@ -558,6 +592,114 @@ async def _release_workspace(database: Database, agent_instance_id: uuid.UUID) -
 async def _mark_waiting_for_review(database: Database, task_id: uuid.UUID, result: str | None) -> None:
     async with database.session() as session:
         await TaskRepository.set_waiting_for_review(session, task_id, result=result)
+
+
+async def _mark_post_execution_wait_state(
+    database: Database,
+    task_id: uuid.UUID,
+    result: str | None,
+) -> None:
+    async with database.session() as session:
+        task = await TaskRepository.get(session, task_id)
+        if task is None:
+            return
+        if task.resume_status == TaskStatus.waiting_for_merge:
+            await TaskRepository.set_waiting_for_merge(session, task_id, result=result)
+            return
+        await TaskRepository.set_waiting_for_review(session, task_id, result=result)
+
+
+async def _claim_pending_github_feedback(
+    database: Database,
+    task_id: uuid.UUID,
+    *,
+    limit: int,
+) -> list[GithubPullRequestFeedbackRecord]:
+    async with database.session() as session:
+        return await GithubPullRequestFeedbackRepository.claim_pending_by_task(
+            session,
+            task_id,
+            limit=limit,
+        )
+
+
+async def _mark_github_feedback_processed(
+    database: Database,
+    feedback_items: list[GithubPullRequestFeedbackRecord],
+) -> None:
+    async with database.session() as session:
+        await GithubPullRequestFeedbackRepository.mark_processed(
+            session,
+            [item.id for item in feedback_items],
+        )
+
+
+async def _requeue_github_feedback(
+    database: Database,
+    feedback_items: list[GithubPullRequestFeedbackRecord],
+) -> None:
+    async with database.session() as session:
+        await GithubPullRequestFeedbackRepository.requeue_processing(
+            session,
+            [item.id for item in feedback_items],
+        )
+
+
+def _build_github_feedback_prompt(
+    task: TaskRecord,
+    feedback_items: list[GithubPullRequestFeedbackRecord],
+) -> str:
+    pull_number = feedback_items[0].pull_request_number
+    lines = [
+        "Continue the current task.",
+        f"There is new GitHub feedback on the existing pull request #{pull_number} in {task.repo}.",
+        "This is not a new task and you must not open a new pull request.",
+        "If code changes are needed, update the existing branch/PR and then reply on GitHub.",
+        "Use `reply_to_pr` for `pr_comment` and `pr_review` items.",
+        "Use `reply_to_pr_review_comment` for `pr_review_comment` items with the exact `comment_id` shown below.",
+        "Handle every feedback item exactly once.",
+        "",
+        "Feedback items:",
+    ]
+
+    for index, item in enumerate(feedback_items, start=1):
+        reply_tool = (
+            f"reply_to_pr_review_comment(pull_number={pull_number}, comment_id={item.external_id})"
+            if item.kind == GithubPullRequestFeedbackKind.pr_review_comment
+            else f"reply_to_pr(pull_number={pull_number})"
+        )
+        summary_parts = [
+            f"{index}. kind={item.kind.value}",
+            f"github_id={item.external_id}",
+            f"reply_with={reply_tool}",
+            f"author={item.author or 'unknown'}",
+        ]
+        if item.review_state:
+            summary_parts.append(f"review_state={item.review_state}")
+        if item.file_path:
+            summary_parts.append(f"file={item.file_path}")
+        if item.line is not None:
+            summary_parts.append(f"line={item.line}")
+        if item.html_url:
+            summary_parts.append(f"url={item.html_url}")
+        lines.append("; ".join(summary_parts))
+        if item.body:
+            lines.append(_format_github_feedback_message(item))
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
+def _format_github_feedback_message(item: GithubPullRequestFeedbackRecord) -> str:
+    reminder_parts = [
+        "The following feedback was sent from GitHub",
+        f"by `{item.author}`" if item.author else "by an unknown GitHub user",
+        f"as `{item.kind.value}`",
+    ]
+    if item.review_state:
+        reminder_parts.append(f"with review state `{item.review_state}`")
+    reminder = " ".join(reminder_parts) + "."
+    return f"<agent-system-reminder>{reminder}</agent-system-reminder>{item.body}"
 
 
 async def _mark_failed(database: Database, task_id: uuid.UUID, error: str) -> None:

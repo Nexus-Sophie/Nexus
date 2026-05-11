@@ -21,6 +21,7 @@ _REQUIRED_SCHEMA: dict[str, set[str]] = {
         "external_issue_url",
         "external_pull_request_url",
         "status",
+        "resume_status",
         "checkpoint",
         "dispatch_token",
         "lease_expires_at",
@@ -79,6 +80,27 @@ _REQUIRED_SCHEMA: dict[str, set[str]] = {
         "author",
         "body",
     },
+    "github_pull_request_feedback": {
+        "id",
+        "task_id",
+        "pull_request_number",
+        "kind",
+        "status",
+        "external_id",
+        "author",
+        "body",
+        "review_state",
+        "file_path",
+        "line",
+        "original_line",
+        "commit_id",
+        "html_url",
+        "external_created_at",
+        "external_updated_at",
+        "ignored_reason",
+        "processed_at",
+        "payload",
+    },
 }
 
 
@@ -106,6 +128,7 @@ class Database:
             await conn.execute(text("ALTER TABLE task ADD COLUMN IF NOT EXISTS checkpoint JSON"))
             await conn.execute(text("ALTER TABLE task ADD COLUMN IF NOT EXISTS dispatch_token VARCHAR(64)"))
             await conn.execute(text("ALTER TABLE task ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ"))
+            await conn.execute(text("ALTER TABLE task ADD COLUMN IF NOT EXISTS resume_status VARCHAR(32)"))
             await conn.execute(
                 text("ALTER TABLE task ADD COLUMN IF NOT EXISTS external_issue_url VARCHAR(1024)")
             )

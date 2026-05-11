@@ -167,6 +167,32 @@ class AgentTaskRunner:
     async def dispatch_existing_task(self, task_id: uuid.UUID, *, recovered: bool = False) -> bool:
         return await self._dispatch(task_id, recovered=recovered)
 
+    async def dispatch_github_feedback(self, task_id: uuid.UUID) -> bool:
+        async with self._database.session() as session:
+            queued = await TaskRepository.queue_github_feedback(session, task_id)
+        if queued is None:
+            return False
+
+        try:
+            dispatched = await self._dispatch(task_id, recovered=False)
+        except Exception as exc:
+            async with self._database.session() as session:
+                await TaskRepository.restore_github_feedback_dispatch(
+                    session,
+                    task_id,
+                    error=f"GitHub feedback dispatch failed: {exc}",
+                )
+            raise
+
+        if not dispatched:
+            async with self._database.session() as session:
+                await TaskRepository.restore_github_feedback_dispatch(
+                    session,
+                    task_id,
+                    error="GitHub feedback dispatch skipped because the task is no longer dispatchable.",
+                )
+        return dispatched
+
     async def _dispatch(self, task_id: uuid.UUID, *, recovered: bool) -> bool:
         """Acquire a dispatch lease then emit a Celery message.
 

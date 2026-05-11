@@ -28,6 +28,10 @@ class Settings:
     celery_task_publish_max_retries: int
     celery_broker_connection_timeout_seconds: float
     task_dispatch_lease_seconds: int
+    github_feedback_poll_interval_seconds: int
+    github_feedback_poll_task_limit: int
+    github_feedback_batch_size: int
+    github_feedback_http_timeout_seconds: float
 
 
 @lru_cache(maxsize=1)
@@ -69,5 +73,17 @@ def get_settings() -> Settings:
         ),
         task_dispatch_lease_seconds=int(
             os.getenv("NEXUS_TASK_DISPATCH_LEASE_SECONDS", "60"),
+        ),
+        github_feedback_poll_interval_seconds=int(
+            os.getenv("NEXUS_GITHUB_FEEDBACK_POLL_INTERVAL_SECONDS", "60"),
+        ),
+        github_feedback_poll_task_limit=int(
+            os.getenv("NEXUS_GITHUB_FEEDBACK_POLL_TASK_LIMIT", "100"),
+        ),
+        github_feedback_batch_size=int(
+            os.getenv("NEXUS_GITHUB_FEEDBACK_BATCH_SIZE", "20"),
+        ),
+        github_feedback_http_timeout_seconds=float(
+            os.getenv("NEXUS_GITHUB_FEEDBACK_HTTP_TIMEOUT_SECONDS", "10.0"),
         ),
     )

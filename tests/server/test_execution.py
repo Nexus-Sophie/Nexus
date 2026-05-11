@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 from src.agents.base.agent import BaseAgentResponse
 from src.server.celery import execution
-from src.server.postgres.models import TaskWorkItemStatus
+from src.server.postgres.models import GithubPullRequestFeedbackKind, TaskStatus, TaskWorkItemStatus
 from src.server.postgres.repositories import TaskWorkItemRepository, VirtualPullRequestRepository
 
 
@@ -433,3 +433,107 @@ def test_run_agent_workflow_waits_when_all_work_items_review_ready(monkeypatch):
     assert result is None
     assert fake_agent.enter_count == 1
     assert fake_agent.close_count == 1
+
+
+def test_run_agent_workflow_processes_github_feedback_from_checkpoint(monkeypatch):
+    task = make_task(
+        checkpoint=[
+            {"role": "system", "content": "checkpoint system"},
+            {"role": "assistant", "content": "checkpoint progress"},
+        ]
+    )
+    fake_agent = FakeAgent()
+    captured = {}
+    feedback_items = [
+        SimpleNamespace(
+            id="feedback-1",
+            pull_request_number=17,
+            kind=GithubPullRequestFeedbackKind.pr_review_comment,
+            external_id=901,
+            author="reviewer",
+            body="Please rename this variable.",
+            review_state=None,
+            file_path="src/main.py",
+            line=42,
+            html_url="https://github.com/owner/repo/pull/17#discussion_r901",
+        )
+    ]
+
+    async def claim_feedback(database, task_id, *, limit):
+        assert task_id == task.id
+        assert limit == 5
+        return feedback_items
+
+    async def mark_processed(database, claimed_items):
+        captured["processed"] = claimed_items
+
+    async def latest_checkpoint(database, task_id):
+        assert task_id == task.id
+        return task.checkpoint or []
+
+    async def fake_run_agent(**kwargs):
+        captured["run"] = kwargs
+        return BaseAgentResponse(response="replied", sop=None)
+
+    monkeypatch.setattr(execution, "_claim_pending_github_feedback", claim_feedback)
+    monkeypatch.setattr(execution, "_mark_github_feedback_processed", mark_processed)
+    monkeypatch.setattr(execution, "_get_latest_checkpoint", latest_checkpoint)
+    monkeypatch.setattr(execution, "_build_agent", lambda **_: fake_agent)
+    monkeypatch.setattr(execution, "_run_agent", fake_run_agent)
+
+    result = asyncio.run(
+        execution._run_agent_workflow(
+            database=FakeDatabase(),
+            task=task,
+            on_progress=None,
+            settings=SimpleNamespace(github_feedback_batch_size=5),
+            workspace_key="workspace",
+            github_repo="owner/repo",
+            recovered=False,
+        )
+    )
+
+    assert result is None
+    assert captured["processed"] == feedback_items
+    assert captured["run"]["checkpoint"] == [
+        {"role": "system", "content": "checkpoint system"},
+        {"role": "assistant", "content": "checkpoint progress"},
+    ]
+    assert "Continue the current task from its saved checkpoint." in captured["run"]["question"]
+    assert "reply_to_pr_review_comment(pull_number=17, comment_id=901)" in captured["run"]["question"]
+    assert (
+        "<agent-system-reminder>The following feedback was sent from GitHub by `reviewer` "
+        "as `pr_review_comment`.</agent-system-reminder>Please rename this variable."
+    ) in captured["run"]["question"]
+    assert fake_agent.enter_count == 1
+    assert fake_agent.close_count == 1
+
+
+def test_mark_post_execution_wait_state_restores_waiting_for_merge(monkeypatch):
+    task_id = "task-id"
+    captured = {}
+
+    async def fake_get(session, requested_task_id):
+        assert requested_task_id == task_id
+        return SimpleNamespace(id=task_id, resume_status=TaskStatus.waiting_for_merge)
+
+    async def fake_waiting_for_merge(session, requested_task_id, *, result):
+        captured["task_id"] = requested_task_id
+        captured["result"] = result
+
+    async def fail_waiting_for_review(session, requested_task_id, *, result):
+        raise AssertionError("waiting_for_review should not be used when resume_status is waiting_for_merge")
+
+    monkeypatch.setattr(execution.TaskRepository, "get", fake_get)
+    monkeypatch.setattr(execution.TaskRepository, "set_waiting_for_merge", fake_waiting_for_merge)
+    monkeypatch.setattr(execution.TaskRepository, "set_waiting_for_review", fail_waiting_for_review)
+
+    asyncio.run(
+        execution._mark_post_execution_wait_state(
+            FakeDatabase(),
+            task_id,
+            "done",
+        )
+    )
+
+    assert captured == {"task_id": task_id, "result": "done"}

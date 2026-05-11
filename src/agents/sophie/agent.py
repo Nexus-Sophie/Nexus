@@ -68,7 +68,7 @@ class Sophie(CodeAgent):
             workspace_key=self.sandbox_workspace_key,
         )
         sandbox_tools = SandboxToolKit(self._sandbox)
-        github_kit = GithubTools(self._sandbox)
+        github_kit = GithubTools(self._sandbox, self._nexus_task_context)
         nexus_kit = NexusReviewTools(self._sandbox, self._nexus_task_context)
 
         kits = sandbox_tools.all_tools
@@ -119,7 +119,7 @@ class Sophie(CodeAgent):
             self._sandbox_pool_manager = None
         await self.close()
 
-    @track(tags=["exec", "sophie"], step_type="llm", llm_provider=LLMProvider.KIMI, system_prompt="Sophie/step@0.1")
+    @track(tags=["exec", "sophie"], step_type="llm", llm_provider=LLMProvider.OPENAI, system_prompt="Sophie/step@0.1")
     async def step(self, current_turn_ctx: List[ChatCompletionMessageParam]) -> BaseAgentStepResult:
         if self._sandbox is None:
             raise RuntimeError("Sophie must be used as an async context manager (async with Sophie(...) as sophie:)")
