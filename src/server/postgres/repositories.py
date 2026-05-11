@@ -339,16 +339,25 @@ class TaskRepository:
         *,
         limit: int = 200,
     ) -> list[TaskRecord]:
+        reviewable_running_task = and_(
+            TaskRecord.status == TaskStatus.running,
+            select(VirtualPullRequestRecord.id)
+            .where(VirtualPullRequestRecord.task_id == TaskRecord.id)
+            .exists(),
+        )
         query = (
             select(TaskRecord)
             .where(
-                TaskRecord.status.in_(
-                    [
-                        TaskStatus.waiting_for_review,
-                        TaskStatus.waiting_for_merge,
-                        TaskStatus.merged,
-                        TaskStatus.closed,
-                    ]
+                or_(
+                    TaskRecord.status.in_(
+                        [
+                            TaskStatus.waiting_for_review,
+                            TaskStatus.waiting_for_merge,
+                            TaskStatus.merged,
+                            TaskStatus.closed,
+                        ]
+                    ),
+                    reviewable_running_task,
                 )
             )
             .order_by(TaskRecord.updated_at.desc(), TaskRecord.created_at.desc())

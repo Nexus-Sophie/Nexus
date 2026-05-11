@@ -533,6 +533,79 @@ def test_review_virtual_pr_approval_waits_without_dispatch(monkeypatch: pytest.M
     assert 'dispatched' not in captured
 
 
+def test_review_virtual_pr_approval_keeps_running_task_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(timezone.utc)
+    task = _make_task(question='large task', status=TaskStatus.running, created_at=now)
+    virtual_pr = SimpleNamespace(
+        id=uuid.uuid4(),
+        task_id=task.id,
+        work_item_id=uuid.uuid4(),
+        status=VirtualPullRequestStatus.ready_for_review,
+    )
+    review = SimpleNamespace(
+        id=uuid.uuid4(),
+        task_id=task.id,
+        virtual_pr_id=virtual_pr.id,
+        decision=VirtualPullRequestReviewDecision.approved,
+        reviewer='reviewer',
+        comment='looks good',
+        created_at=now,
+    )
+    captured: dict[str, Any] = {}
+
+    async def fake_get_task(session, task_id):
+        assert task_id == task.id
+        return task
+
+    async def fake_get_virtual_pr(session, virtual_pr_id):
+        assert virtual_pr_id == virtual_pr.id
+        return virtual_pr
+
+    async def fake_add_review(session, **kwargs):
+        captured['review'] = kwargs
+        return review
+
+    async def fake_mark_approved(session, work_item_id):
+        captured['approved_work_item_id'] = work_item_id
+        return None
+
+    async def fake_list_work_items(session, task_id):
+        assert task_id == task.id
+        return [
+            SimpleNamespace(id=virtual_pr.work_item_id, status=TaskWorkItemStatus.approved),
+            SimpleNamespace(id=uuid.uuid4(), status=TaskWorkItemStatus.pending),
+        ]
+
+    async def fail_set_waiting_for_review(session, task_id, **kwargs):
+        raise AssertionError('running tasks with remaining work should stay running')
+
+    async def fail_set_waiting_for_merge(session, task_id, **kwargs):
+        raise AssertionError('running tasks with remaining work should not wait for merge')
+
+    monkeypatch.setattr(TaskRepository, 'get', fake_get_task)
+    monkeypatch.setattr(VirtualPullRequestRepository, 'get', fake_get_virtual_pr)
+    monkeypatch.setattr(VirtualPullRequestRepository, 'add_review', fake_add_review)
+    monkeypatch.setattr(TaskWorkItemRepository, 'mark_approved', fake_mark_approved)
+    monkeypatch.setattr(TaskWorkItemRepository, 'list_by_task', fake_list_work_items)
+    monkeypatch.setattr(TaskRepository, 'set_waiting_for_review', fail_set_waiting_for_review)
+    monkeypatch.setattr(TaskRepository, 'set_waiting_for_merge', fail_set_waiting_for_merge)
+
+    async def run_request() -> httpx.Response:
+        transport = httpx.ASGITransport(app=_build_app())
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            return await client.patch(
+                f'/v1/tasks/{task.id}/virtual-prs/{virtual_pr.id}/review',
+                json={'decision': 'approved', 'reviewer': 'reviewer', 'comment': 'looks good'},
+            )
+
+    response = asyncio.run(run_request())
+
+    assert response.status_code == 200
+    assert response.json()['decision'] == 'approved'
+    assert captured['review']['decision'] == VirtualPullRequestReviewDecision.approved
+    assert captured['approved_work_item_id'] == virtual_pr.work_item_id
+
+
 def test_review_virtual_pr_marks_waiting_for_merge_when_all_approved(monkeypatch: pytest.MonkeyPatch) -> None:
     now = datetime.now(timezone.utc)
     task = _make_task(question='large task', status=TaskStatus.waiting_for_review, created_at=now)
@@ -835,15 +908,18 @@ def test_list_review_queue_returns_reviewable_tasks_with_pr_counts(monkeypatch: 
     now = datetime.now(timezone.utc)
     task_one = _make_task(question='review one', status=TaskStatus.waiting_for_review, created_at=now)
     task_two = _make_task(question='review two', status=TaskStatus.waiting_for_merge, created_at=now - timedelta(minutes=5))
+    task_three = _make_task(question='review three', status=TaskStatus.running, created_at=now - timedelta(minutes=10))
 
     async def fake_list_review_queue(session, *, limit):
         assert limit == 25
-        return [task_one, task_two]
+        return [task_one, task_two, task_three]
 
     async def fake_list_virtual_prs(session, task_id):
         if task_id == task_one.id:
             return [SimpleNamespace(id=uuid.uuid4()), SimpleNamespace(id=uuid.uuid4())]
-        return [SimpleNamespace(id=uuid.uuid4())]
+        if task_id == task_two.id:
+            return [SimpleNamespace(id=uuid.uuid4())]
+        return [SimpleNamespace(id=uuid.uuid4()), SimpleNamespace(id=uuid.uuid4()), SimpleNamespace(id=uuid.uuid4())]
 
     monkeypatch.setattr(TaskRepository, 'list_review_queue', fake_list_review_queue)
     monkeypatch.setattr(VirtualPullRequestRepository, 'list_by_task', fake_list_virtual_prs)
@@ -894,6 +970,25 @@ def test_list_review_queue_returns_reviewable_tasks_with_pr_counts(monkeypatch: 
                 'finished_at': None,
             },
             'virtual_pr_count': 1,
+        },
+        {
+            'task': {
+                'id': str(task_three.id),
+                'agent': task_three.agent.value,
+                'agent_instance_id': str(task_three.agent_instance_id),
+                'question': task_three.question,
+                'repo': task_three.repo,
+                'project': task_three.project,
+                'external_issue_url': None,
+                'status': task_three.status.value,
+                'result': None,
+                'error': None,
+                'created_at': task_three.created_at.isoformat().replace('+00:00', 'Z'),
+                'updated_at': task_three.updated_at.isoformat().replace('+00:00', 'Z'),
+                'started_at': task_three.started_at.isoformat().replace('+00:00', 'Z'),
+                'finished_at': None,
+            },
+            'virtual_pr_count': 3,
         },
     ]
 

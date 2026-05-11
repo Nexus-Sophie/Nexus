@@ -82,6 +82,11 @@ async def _sync_task_status_for_virtual_pr_review(
         for work_item in work_items
     ):
         return await TaskRepository.set_waiting_for_merge(session, task.id, result=task.result)
+    if any(
+        work_item.status in {TaskWorkItemStatus.pending, TaskWorkItemStatus.running}
+        for work_item in work_items
+    ):
+        return task
     return await TaskRepository.set_waiting_for_review(session, task.id, result=task.result)
 
 
