@@ -679,6 +679,23 @@ class TaskRepository:
         await session.refresh(task)
         return task
 
+    @staticmethod
+    async def set_external_pull_request_url(
+        session: AsyncSession,
+        task_id: uuid.UUID,
+        *,
+        external_pull_request_url: str | None,
+    ) -> TaskRecord | None:
+        task = await session.get(TaskRecord, task_id)
+        if task is None:
+            return None
+
+        task.external_pull_request_url = external_pull_request_url
+        task.updated_at = utc_now()
+        await session.commit()
+        await session.refresh(task)
+        return task
+
 
 class TaskWorkItemRepository:
     @staticmethod

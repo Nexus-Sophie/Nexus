@@ -1,8 +1,4 @@
-import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { toast } from 'sonner';
-import { getErrorDetail } from '@/api/client';
-import { getTaskReviewSummary } from '@/api/tasks';
 import { useAppLayout } from '@/components/layout/AppLayout';
 import { TaskBoardColumn } from './components/TaskBoardColumn';
 import { TaskBoardRepoSelect } from './components/TaskBoardRepoSelect';
@@ -16,36 +12,11 @@ export default function TaskBoardPage() {
   });
 
   const navigate = useNavigate();
-  const [activeReviewTaskId, setActiveReviewTaskId] = useState<string | null>(null);
   const { groupedTasks, repoOptions, repoFilter, setRepoFilter, isLoading } =
     useTaskBoardData();
 
-  const openReview = async (taskId: string) => {
-    setActiveReviewTaskId(taskId);
-    try {
-      const summary = await getTaskReviewSummary(taskId);
-      const readyForReviewVirtualPrs = summary.virtual_prs.filter(
-        virtualPr => virtualPr.status === 'ready_for_review',
-      );
-      const targetVirtualPr =
-        readyForReviewVirtualPrs.length === 1
-          ? readyForReviewVirtualPrs[0]
-          : summary.virtual_prs.length === 1
-            ? summary.virtual_prs[0]
-            : null;
-
-      navigate(
-        targetVirtualPr
-          ? `/code-review/nexus/tasks/${taskId}/pull-requests/${targetVirtualPr.id}`
-          : `/code-review/nexus/tasks/${taskId}`,
-      );
-    } catch (error) {
-      toast.error('Failed to open review', {
-        description: getErrorDetail(error, 'Unable to load the review target.'),
-      });
-    } finally {
-      setActiveReviewTaskId(null);
-    }
+  const openReview = (taskId: string) => {
+    navigate(`/code-review/nexus/tasks/${taskId}`);
   };
 
   return (
@@ -64,10 +35,7 @@ export default function TaskBoardPage() {
               status={status}
               tasks={groupedTasks[status]}
               isLoading={isLoading}
-              activeReviewTaskId={activeReviewTaskId}
-              onOpenReview={taskId => {
-                void openReview(taskId);
-              }}
+              onOpenReview={openReview}
             />
           ))}
         </div>

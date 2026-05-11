@@ -19,6 +19,7 @@ _REQUIRED_SCHEMA: dict[str, set[str]] = {
         "agent_instance_id",
         "question",
         "external_issue_url",
+        "external_pull_request_url",
         "status",
         "requested_current_session_ctx",
         "requested_history_session_ctx",
@@ -121,6 +122,11 @@ class Database:
             await conn.execute(text("ALTER TABLE task ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ"))
             await conn.execute(
                 text("ALTER TABLE task ADD COLUMN IF NOT EXISTS external_issue_url VARCHAR(1024)")
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE task ADD COLUMN IF NOT EXISTS external_pull_request_url VARCHAR(1024)"
+                )
             )
             await conn.execute(
                 text(

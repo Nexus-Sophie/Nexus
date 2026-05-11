@@ -13,27 +13,17 @@ function App() {
     <BrowserRouter>
       <Toaster />
       <Routes>
-        <Route
-          path="/workspace/code-review/nexus/tasks/:taskId/pull-requests/:virtualPrId"
-          element={<NexusReviewPage mode="pull-request" />}
-        />
-        <Route
-          path="/code-review/nexus/tasks/:taskId/pull-requests/:virtualPrId"
-          element={<NexusReviewPage mode="pull-request" />}
-        />
         <Route element={<AppLayout />}>
           <Route path="/" element={<Navigate to={DEFAULT_WORKSPACE_PATH} replace />} />
           <Route path="/publish-task" element={<PublishTaskPage />} />
           <Route path="/process-tracking" element={<ProcessTrackingPage />} />
           <Route path="/task-board" element={<TaskBoardPage />} />
           <Route path="/code-review" element={<Navigate to="/code-review/nexus" replace />} />
+          <Route path="/code-review/nexus" element={<NexusReviewPage />} />
+          <Route path="/code-review/nexus/tasks/:taskId" element={<NexusReviewPage />} />
           <Route
-            path="/code-review/nexus"
-            element={<NexusReviewPage mode="queue" />}
-          />
-          <Route
-            path="/code-review/nexus/tasks/:taskId"
-            element={<NexusReviewPage mode="task" />}
+            path="/code-review/nexus/tasks/:taskId/pull-requests/:virtualPrId"
+            element={<NexusReviewPage />}
           />
           <Route path="/workspace" element={<Navigate to={DEFAULT_WORKSPACE_PATH} replace />} />
           <Route path="/workspace/publish-task" element={<Navigate to="/publish-task" replace />} />
@@ -43,13 +33,14 @@ function App() {
           />
           <Route path="/workspace/task-board" element={<Navigate to="/task-board" replace />} />
           <Route path="/workspace/code-review" element={<Navigate to="/code-review" replace />} />
-          <Route
-            path="/workspace/code-review/nexus"
-            element={<NexusReviewPage mode="queue" />}
-          />
+          <Route path="/workspace/code-review/nexus" element={<NexusReviewPage />} />
           <Route
             path="/workspace/code-review/nexus/tasks/:taskId"
-            element={<NexusReviewPage mode="task" />}
+            element={<NexusReviewPage />}
+          />
+          <Route
+            path="/workspace/code-review/nexus/tasks/:taskId/pull-requests/:virtualPrId"
+            element={<NexusReviewPage />}
           />
           <Route path="/overview" element={<Navigate to={DEFAULT_WORKSPACE_PATH} replace />} />
           <Route

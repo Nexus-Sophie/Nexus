@@ -4,15 +4,20 @@ import { timeAgo, type WorkspaceTaskView } from '@/lib/workspace-task-view';
 
 type TaskBoardTaskCardProps = {
   task: WorkspaceTaskView;
-  isOpeningReview: boolean;
   onOpenReview: (taskId: string) => void;
 };
 
 export function TaskBoardTaskCard({
   task,
-  isOpeningReview,
   onOpenReview,
 }: TaskBoardTaskCardProps) {
+  const canOpenReview =
+    task.status === 'waiting_for_review' ||
+    task.status === 'waiting_for_merge' ||
+    task.status === 'merged' ||
+    task.status === 'closed' ||
+    Boolean(task.externalPullRequestUrl);
+
   return (
     <article className="min-w-0 rounded-lg border bg-background p-3">
       <p className="line-clamp-3 text-sm font-medium leading-snug">{task.question}</p>
@@ -42,16 +47,15 @@ export function TaskBoardTaskCard({
 
       <div className="mt-2 flex justify-end">
         <div className="flex items-center gap-1">
-          {task.status === 'waiting_for_review' ? (
+          {canOpenReview ? (
             <Button
               type="button"
               size="sm"
               variant="secondary"
               className="h-7 px-2 text-xs"
-              disabled={isOpeningReview}
               onClick={() => onOpenReview(task.id)}
             >
-              {isOpeningReview ? 'Opening...' : 'To Review'}
+              Open Review
             </Button>
           ) : null}
           <Button asChild size="sm" variant="ghost" className="h-7 px-2 text-xs">

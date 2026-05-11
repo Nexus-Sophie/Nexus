@@ -23,6 +23,8 @@ export type WorkspaceTaskView = {
   question: string;
   repo: string | null;
   project: string | null;
+  externalIssueUrl: string | null;
+  externalPullRequestUrl: string | null;
   status: ApiTask['status'];
   result: string | null;
   error: string | null;
@@ -149,6 +151,8 @@ export function toWorkspaceTaskView(
     question: task.question,
     repo: task.repo,
     project: task.project,
+    externalIssueUrl: task.external_issue_url,
+    externalPullRequestUrl: task.external_pull_request_url,
     status: task.status,
     result: task.result,
     error: task.error,

@@ -192,6 +192,7 @@ class TaskRecord(Base):
     repo: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     project: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     external_issue_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    external_pull_request_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     requested_current_session_ctx: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON,
         nullable=False,

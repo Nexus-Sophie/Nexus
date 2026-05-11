@@ -9,7 +9,6 @@ type TaskBoardColumnProps = {
   status: TaskBoardStatus;
   tasks: WorkspaceTaskView[];
   isLoading: boolean;
-  activeReviewTaskId: string | null;
   onOpenReview: (taskId: string) => void;
 };
 
@@ -17,7 +16,6 @@ export function TaskBoardColumn({
   status,
   tasks,
   isLoading,
-  activeReviewTaskId,
   onOpenReview,
 }: TaskBoardColumnProps) {
   const statusMeta = STATUS_META[status];
@@ -55,7 +53,6 @@ export function TaskBoardColumn({
                 <TaskBoardTaskCard
                   key={task.id}
                   task={task}
-                  isOpeningReview={activeReviewTaskId === task.id}
                   onOpenReview={onOpenReview}
                 />
               ))}
