@@ -19,10 +19,11 @@ type QueueTab = {
 const REVIEW_TAB_STATUS_PRIORITY: Partial<Record<ApiTaskStatus, number>> = {
   waiting_for_merge: 0,
   waiting_for_review: 1,
+  running: 2,
 };
 
 const QUEUE_TABS: QueueTab[] = [
-  { id: 'review', label: 'Review', statuses: ['waiting_for_review', 'waiting_for_merge'] },
+  { id: 'review', label: 'Review', statuses: ['running', 'waiting_for_review', 'waiting_for_merge'] },
   { id: 'merge', label: 'Merge', statuses: ['merged'] },
   { id: 'close', label: 'Close', statuses: ['closed'] },
 ];

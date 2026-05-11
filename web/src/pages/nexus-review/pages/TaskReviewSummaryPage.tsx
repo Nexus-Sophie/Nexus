@@ -58,6 +58,9 @@ function mergeBlockReason(summary: ApiTaskReviewSummary): string | null {
   if (summary.task.status === 'merged') {
     return 'This pull request is already merged.';
   }
+  if (summary.task.status === 'running') {
+    return 'This task is still running. More work items may finish before merge is available.';
+  }
 
   const blockedPullRequests = summary.virtual_prs
     .map(virtualPr => {
@@ -219,6 +222,11 @@ export function TaskReviewSummaryPage() {
         ) : (
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
             <div className="space-y-3">
+              {summary.task.status === 'running' ? (
+                <p className="rounded-lg border border-dashed px-4 py-3 text-sm text-muted-foreground">
+                  This task is still running. Completed work items appear here for review as each virtual PR is created.
+                </p>
+              ) : null}
               {summary.virtual_prs.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No pull requests are ready for review yet.</p>
               ) : (
