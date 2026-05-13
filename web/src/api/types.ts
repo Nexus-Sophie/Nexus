@@ -1,4 +1,6 @@
-export type ApiAgentKind = 'tela' | 'sophie';
+export type ApiAgentKind = 'tela' | 'sophie' | 'marc';
+
+export type ApiTaskCategory = 'coding' | 'product discovery';
 
 export type ApiTaskStatus =
   | 'queued'
@@ -15,7 +17,7 @@ export interface ApiTaskCreateRequest {
   agent_instance_id: string;
   agent: ApiAgentKind;
   question: string;
-  repo: string;
+  repo?: string | null;
   project?: string | null;
   external_issue_url?: string | null;
 }
@@ -27,6 +29,7 @@ export interface ApiTaskConsultRequest {
 export interface ApiTaskSubmitResponse {
   task_id: string;
   agent_instance_id: string;
+  category: ApiTaskCategory;
   status: ApiTaskStatus;
 }
 
@@ -41,6 +44,7 @@ export interface ApiTask {
   id: string;
   agent: ApiAgentKind;
   agent_instance_id: string;
+  category: ApiTaskCategory;
   question: string;
   repo: string | null;
   project: string | null;
@@ -68,6 +72,7 @@ export interface ApiWorkspace {
   agent_instance_id: string;
   workspace_key: string;
   github_repo: string | null;
+  project: string | null;
   docker_container_id: string | null;
   docker_volume_name: string | null;
   status: ApiWorkspaceStatus;
