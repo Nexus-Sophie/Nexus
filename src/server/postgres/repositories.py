@@ -324,12 +324,10 @@ class WorkspaceRepository:
         *,
         agent_instance_id: uuid.UUID,
     ) -> WorkspaceRecord | None:
-        return await WorkspaceRepository._set_state(
+        return await WorkspaceRepository._set_status(
             session,
             agent_instance_id=agent_instance_id,
             status=WorkspaceStatus.idle,
-            github_repo=None,
-            project=None,
         )
 
     @staticmethod
@@ -338,14 +336,31 @@ class WorkspaceRepository:
         *,
         agent_instance_id: uuid.UUID,
     ) -> WorkspaceRecord | None:
-        return await WorkspaceRepository._set_state(
+        return await WorkspaceRepository._set_status(
             session,
             agent_instance_id=agent_instance_id,
             status=WorkspaceStatus.inactive,
-            github_repo=None,
-            project=None,
         )
-    
+
+    @staticmethod
+    async def _set_status(
+        session: AsyncSession,
+        *,
+        agent_instance_id: uuid.UUID,
+        status: WorkspaceStatus,
+    ) -> WorkspaceRecord | None:
+        workspace = await WorkspaceRepository.get_by_agent_instance_id(session, agent_instance_id)
+        if workspace is None:
+            return None
+
+        now = utc_now()
+        workspace.status = status
+        workspace.last_used_at = now
+        workspace.updated_at = now
+        await session.commit()
+        await session.refresh(workspace)
+        return workspace
+
     @staticmethod
     async def _set_state(
         session: AsyncSession,

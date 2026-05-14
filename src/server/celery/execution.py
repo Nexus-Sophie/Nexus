@@ -660,8 +660,7 @@ async def _get_latest_checkpoint(database: Database, task_id: uuid.UUID) -> list
 
 async def _release_workspace(database: Database, agent_instance_id: uuid.UUID) -> None:
     """Release workspace not delete.
-    Set workspace status as idle and clear repo/project if agent instance is active.
-    Else set workspace as inactive and clear repo/project.
+    Set workspace status as idle/inactive while preserving the agent binding.
     """
 
     async with database.session() as session:

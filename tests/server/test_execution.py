@@ -603,3 +603,51 @@ def test_mark_post_execution_wait_state_restores_waiting_for_merge(monkeypatch):
     )
 
     assert captured == {"task_id": task_id, "result": "done"}
+
+
+def test_release_workspace_keeps_binding_for_active_instance(monkeypatch):
+    captured = {}
+
+    async def fake_get(session, agent_instance_id):
+        assert agent_instance_id == "agent-id"
+        return SimpleNamespace(is_active=True)
+
+    async def fake_set_idle(session, *, agent_instance_id):
+        captured["agent_instance_id"] = agent_instance_id
+
+    async def fail_set_inactive(session, *, agent_instance_id):
+        raise AssertionError("inactive workspace release should not run for active instances")
+
+    monkeypatch.setattr(execution.AgentInstanceRepository, "get", fake_get)
+    monkeypatch.setattr(execution.WorkspaceRepository, "set_idle", fake_set_idle)
+    monkeypatch.setattr(execution.WorkspaceRepository, "set_inactive", fail_set_inactive)
+
+    asyncio.run(execution._release_workspace(FakeDatabase(), "agent-id"))
+
+    assert captured == {
+        "agent_instance_id": "agent-id",
+    }
+
+
+def test_release_workspace_keeps_binding_for_inactive_instance(monkeypatch):
+    captured = {}
+
+    async def fake_get(session, agent_instance_id):
+        assert agent_instance_id == "agent-id"
+        return SimpleNamespace(is_active=False)
+
+    async def fail_set_idle(session, *, agent_instance_id):
+        raise AssertionError("active workspace release should not run for inactive instances")
+
+    async def fake_set_inactive(session, *, agent_instance_id):
+        captured["agent_instance_id"] = agent_instance_id
+
+    monkeypatch.setattr(execution.AgentInstanceRepository, "get", fake_get)
+    monkeypatch.setattr(execution.WorkspaceRepository, "set_idle", fail_set_idle)
+    monkeypatch.setattr(execution.WorkspaceRepository, "set_inactive", fake_set_inactive)
+
+    asyncio.run(execution._release_workspace(FakeDatabase(), "agent-id"))
+
+    assert captured == {
+        "agent_instance_id": "agent-id",
+    }
