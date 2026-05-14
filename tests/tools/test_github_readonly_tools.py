@@ -3,6 +3,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anyio
+import httpx
+import pytest
 
 from src.tools.code.github.readonly import GithubReadOnlyTools, _parse_github_repo
 
@@ -51,7 +53,7 @@ def test_list_github_issues_returns_summaries_and_uses_token():
 
 
 def test_get_github_issue_returns_body_and_comments():
-    tools = GithubReadOnlyTools(default_repo="owner/repo")
+    tools = GithubReadOnlyTools(default_repo="owner/repo", token="secret-token")
     responses = [
         _response({
             "number": 3,
@@ -86,7 +88,7 @@ def test_get_github_issue_returns_body_and_comments():
 
 
 def test_get_github_pull_request_returns_full_context_without_mutating_methods():
-    tools = GithubReadOnlyTools(default_repo="owner/repo")
+    tools = GithubReadOnlyTools(default_repo="owner/repo", token="secret-token")
     pull = {
         "number": 5,
         "title": "Improve flow",
@@ -143,7 +145,7 @@ def test_get_github_pull_request_returns_full_context_without_mutating_methods()
 
 
 def test_list_github_pull_requests_returns_summaries():
-    tools = GithubReadOnlyTools(default_repo="owner/repo")
+    tools = GithubReadOnlyTools(default_repo="owner/repo", token="secret-token")
     pull = {
         "number": 7,
         "title": "Feature",
@@ -165,3 +167,29 @@ def test_list_github_pull_requests_returns_summaries():
     assert result["success"] is True
     assert result["pull_requests"][0]["number"] == 7
     assert result["pull_requests"][0]["body_preview"] == "summary body"
+
+
+def test_github_readonly_tools_requires_token():
+    with pytest.raises(ValueError, match="GitHub token is required"):
+        GithubReadOnlyTools(default_repo="owner/repo")
+
+
+def test_list_github_issues_surfaces_rate_limit_message():
+    tools = GithubReadOnlyTools(default_repo="owner/repo", token="secret-token")
+    response = httpx.Response(
+        403,
+        headers={
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": "4102444800",
+        },
+        json={"message": "API rate limit exceeded for user."},
+        request=httpx.Request("GET", "https://api.github.com/repos/owner/repo/issues"),
+    )
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = response
+        result = anyio.run(tools.list_github_issues)
+
+    assert result["success"] is False
+    assert "GitHub API rate limit exceeded" in result["message"]
+    assert "Rate limit resets at 2100-01-01" in result["message"]

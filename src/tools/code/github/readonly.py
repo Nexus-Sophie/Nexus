@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 
 import httpx
@@ -84,6 +85,8 @@ class GithubReadOnlyTools:
         token: str | None = None,
     ) -> None:
         self.default_repo = _parse_github_repo(default_repo) or _parse_github_repo(default_repo_url)
+        if not token:
+            raise ValueError("GitHub token is required for GithubReadOnlyTools.")
         self.token = token
 
     @property
@@ -471,7 +474,22 @@ def _github_error_message(exc: httpx.HTTPStatusError) -> str:
         detail = exc.response.json().get("message", exc.response.text)
     except Exception:
         detail = exc.response.text
-    return f"GitHub API error {exc.response.status_code}: {detail}"
+
+    detail_text = detail if isinstance(detail, str) else str(detail)
+    remaining = exc.response.headers.get("x-ratelimit-remaining")
+    if exc.response.status_code in {403, 429} and (
+        remaining == "0" or "rate limit" in detail_text.lower()
+    ):
+        message = f"GitHub API rate limit exceeded: {detail_text}"
+        reset = exc.response.headers.get("x-ratelimit-reset")
+        if reset is not None:
+            try:
+                reset_at = datetime.fromtimestamp(int(reset), tz=timezone.utc).isoformat()
+                message += f" Rate limit resets at {reset_at}."
+            except ValueError:
+                pass
+        return message
+    return f"GitHub API error {exc.response.status_code}: {detail_text}"
 
 
 def _clamp(value: int, lower: int, upper: int) -> int:
