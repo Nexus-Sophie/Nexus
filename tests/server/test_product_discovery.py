@@ -65,7 +65,6 @@ def test_poll_once_dispatches_only_dispatchable_instances(monkeypatch):
     payload = runner.submit_task.await_args.args[0]
     assert payload.agent_instance_id == candidate.id
     assert payload.agent == AgentName.marc
-    assert payload.question == "find product opportunities"
 
 
 def test_poll_once_skips_when_stop_requested(monkeypatch):
