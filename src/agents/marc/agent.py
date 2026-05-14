@@ -11,7 +11,6 @@ from src.agents.base.agent import Agent, BaseAgentStepResult, ModelConfig
 from src.agents.marc.system_prompt import MARC_SYSTEM_PROMPT
 from src.sandbox import PYTHON_312, Sandbox, SandboxConfig, SandboxPoolManager, get_sandbox_pool_manager
 from src.tools.code.github.readonly import GITHUB_READONLY_TOOL_DEFINITIONS, GithubReadOnlyTools
-from src.tools.code_repository import CODE_REPOSITORY_TOOL_DEFINITIONS, CodeRepositoryTools
 from src.tools.nexus import NexusTaskContext
 from src.tools.product import PRODUCT_TOOL_DEFINITIONS, ProductTools
 from src.tools.sandbox import RUN_SHELL, SandboxToolKit
@@ -21,7 +20,6 @@ from src.tools.web_search import web_search, TOOL_DEFINITION as WEB_SEARCH
 _ALL_TOOL_DEFINITIONS = [
     RUN_SHELL,
     WEB_SEARCH,
-    *CODE_REPOSITORY_TOOL_DEFINITIONS,
     *GITHUB_READONLY_TOOL_DEFINITIONS,
     *PRODUCT_TOOL_DEFINITIONS,
 ]
@@ -54,10 +52,6 @@ class Marc(Agent):
             workspace_key=self.sandbox_workspace_key,
         )
         sandbox_tools = SandboxToolKit(self._sandbox)
-        code_repository_tools = CodeRepositoryTools(
-            default_repo_url=self.repo_url or self.github_repo,
-            github_token=self.github_token,
-        )
         github_readonly_tools = GithubReadOnlyTools(
             default_repo=self.github_repo,
             default_repo_url=self.repo_url,
@@ -66,9 +60,9 @@ class Marc(Agent):
         self.tool_kits = {
             "RunCommand": sandbox_tools.all_tools["RunCommand"],
             "WebSearch": web_search,
-            **code_repository_tools.all_tools,
             **github_readonly_tools.all_tools,
         }
+        
         if self._nexus_task_context is not None:
             product_tools = ProductTools(
                 database=self._nexus_task_context.database,
