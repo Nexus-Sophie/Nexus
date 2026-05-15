@@ -11,7 +11,10 @@ from src.server.postgres.models import Base, TASK_CATEGORY_VARCHAR_LENGTH, TASK_
 
 
 _REQUIRED_SCHEMA: dict[str, set[str]] = {
-    "agent_instance": {"id", "agent", "client_id", "is_active"},
+    "user_account": {"id", "github_id", "github_login", "balance"},
+    "auth_session": {"token_hash", "user_id", "expires_at"},
+    "agent_purchase": {"id", "user_id", "agent", "price", "agent_instance_id"},
+    "agent_instance": {"id", "agent", "client_id", "is_active", "expires_at"},
     "workspace": {
         "id",
         "agent_instance_id",
@@ -228,6 +231,38 @@ class Database:
             await conn.execute(
                 text("ALTER TABLE virtual_pull_request_comment ADD COLUMN IF NOT EXISTS parent_comment_id UUID")
             )
+            await conn.execute(text("ALTER TABLE user_account ADD COLUMN IF NOT EXISTS balance NUMERIC(12, 2) DEFAULT 0.00 NOT NULL"))
+            await conn.execute(
+                text(
+                    "DO $$ BEGIN "
+                    "IF EXISTS ("
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'user_account' AND column_name = 'balance_cents'"
+                    ") THEN "
+                    "UPDATE user_account SET balance = balance_cents / 100.0 "
+                    "WHERE balance_cents IS NOT NULL; "
+                    "END IF; "
+                    "END $$;"
+                )
+            )
+            await conn.execute(text("ALTER TABLE agent_purchase ADD COLUMN IF NOT EXISTS price NUMERIC(12, 2)"))
+            await conn.execute(
+                text(
+                    "DO $$ BEGIN "
+                    "IF EXISTS ("
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'agent_purchase' AND column_name = 'price_cents'"
+                    ") THEN "
+                    "UPDATE agent_purchase SET price = price_cents / 100.0 "
+                    "WHERE price_cents IS NOT NULL AND price IS NULL; "
+                    "END IF; "
+                    "END $$;"
+                )
+            )
+            await conn.execute(text("ALTER TABLE agent_purchase ALTER COLUMN price SET NOT NULL"))
+            await conn.execute(text("ALTER TABLE agent_instance ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ"))
+            await conn.execute(text("ALTER TABLE agent_purchase ADD COLUMN IF NOT EXISTS agent_instance_id UUID REFERENCES agent_instance(id) ON DELETE SET NULL"))
+            await conn.execute(text("ALTER TABLE agent_purchase DROP COLUMN IF EXISTS expires_at"))
             await conn.execute(
                 text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_task_work_item_one_running_per_task "

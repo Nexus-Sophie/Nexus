@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from enum import Enum
 from typing import Any
 
@@ -437,3 +438,28 @@ class AgentInstanceResponse(BaseModel):
             updated_at=instance.updated_at,
             workspace=WorkspaceResponse.from_record(workspace) if workspace else None,
         )
+
+
+class UserResponse(BaseModel):
+    id: uuid.UUID
+    github_login: str
+    email: str | None
+    balance: Decimal
+
+
+class RechargeRequest(BaseModel):
+    amount: Decimal = Field(gt=Decimal("0"), le=Decimal("1000000"), decimal_places=2)
+
+
+class PurchaseAgentRequest(BaseModel):
+    agent: AgentKind
+
+
+class PurchaseAgentResponse(BaseModel):
+    id: uuid.UUID
+    agent_instance_id: uuid.UUID
+    agent: str
+    price: Decimal
+    balance: Decimal
+    purchased_at: datetime
+    expires_at: datetime

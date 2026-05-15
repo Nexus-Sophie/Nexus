@@ -62,7 +62,7 @@ class Marc(Agent):
             "WebSearch": web_search,
             **github_readonly_tools.all_tools,
         }
-        
+
         if self._nexus_task_context is not None:
             product_tools = ProductTools(
                 database=self._nexus_task_context.database,

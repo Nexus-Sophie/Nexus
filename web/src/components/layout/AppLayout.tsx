@@ -1,15 +1,20 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useState,
   type ReactNode,
 } from 'react';
 import { NavLink, Outlet, useMatch } from 'react-router-dom';
-import { Sparkles } from 'lucide-react';
+import { ChevronsUpDown, LogOut, Sparkles, Wallet } from 'lucide-react';
+import { SiGithub } from 'react-icons/si';
+import { getCurrentUser, logout } from '@/api/auth';
+import type { ApiUser } from '@/api/types';
 import { WORKSPACE_NAV_ITEMS } from '@/lib/dashboard-nav';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 
 type AppLayoutState = {
   title?: string;
@@ -31,6 +36,10 @@ const DEFAULT_LAYOUT_STATE: AppLayoutState = {
 };
 
 const AppLayoutContext = createContext<AppLayoutContextValue | null>(null);
+
+function formatCny(amount: string): string {
+  return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(Number(amount));
+}
 
 function SidebarNavEntry({ item }: { item: (typeof WORKSPACE_NAV_ITEMS)[number] }) {
   const isParentActive = useMatch({ path: item.to, end: false });
@@ -76,6 +85,69 @@ function SidebarNavEntry({ item }: { item: (typeof WORKSPACE_NAV_ITEMS)[number] 
   );
 }
 
+function SidebarAccount() {
+  const [user, setUser] = useState<ApiUser | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  useEffect(() => {
+    void getCurrentUser()
+      .then(setUser)
+      .catch(() => setUser(null))
+      .finally(() => setIsLoading(false));
+  }, []);
+
+  const handleLogout = async () => {
+    await logout();
+    window.location.href = '/login';
+  };
+
+  return (
+    <div className="relative border-t p-2">
+      {user ? (
+        <>
+          {isMenuOpen ? (
+            <div className="absolute bottom-full left-2 right-2 mb-2 rounded-lg border bg-popover p-1 text-popover-foreground shadow-md">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-sm text-destructive transition-colors hover:bg-accent"
+                onClick={handleLogout}
+              >
+                <LogOut className="size-4" /> Logout
+              </button>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-lg p-2 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            onClick={() => setIsMenuOpen(open => !open)}
+          >
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <SiGithub className="size-4" />
+            </div>
+            <div className="grid min-w-0 flex-1 leading-tight">
+              <span className="truncate font-medium">{user.github_login}</span>
+              <span className="inline-flex items-center gap-1 truncate text-xs text-muted-foreground">
+                <Wallet className="size-3" /> {formatCny(user.balance)}
+              </span>
+            </div>
+            <ChevronsUpDown className="size-4 text-muted-foreground" />
+          </button>
+        </>
+      ) : (
+        <Button asChild variant="ghost" className="h-auto w-full justify-start gap-2 p-2">
+          <a href="/login">
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground">
+              <SiGithub className="size-4" />
+            </div>
+            <span className="truncate text-sm font-medium">{isLoading ? 'Loading account…' : 'Login with GitHub'}</span>
+          </a>
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export function useAppLayout(state: AppLayoutState) {
   const context = useContext(AppLayoutContext);
 
@@ -115,7 +187,6 @@ export function AppLayout() {
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,hsl(var(--background)),hsl(var(--muted)/0.55))] lg:h-screen lg:overflow-hidden">
       <div className="grid min-h-screen lg:h-screen lg:grid-cols-[280px_minmax(0,1fr)]">
-        {/* Sidebar — fixed height, never grows with page content */}
         <aside className="border-r bg-card/75 backdrop-blur-sm lg:overflow-hidden">
           <div className="flex h-full flex-col">
             <div className="flex items-center gap-3 border-b px-5 py-4">
@@ -133,6 +204,7 @@ export function AppLayout() {
                 <SidebarNavEntry key={item.to} item={item} />
               ))}
             </nav>
+            <SidebarAccount />
           </div>
         </aside>
 

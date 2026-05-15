@@ -27,4 +27,8 @@ export const WORKSPACE_NAV_ITEMS = [
       },
     ],
   },
+  {
+    label: 'Pricing',
+    to: '/pricing',
+  },
 ] as const;

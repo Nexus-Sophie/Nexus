@@ -700,7 +700,7 @@ async def _mark_post_execution_wait_state(
             TaskStatus.failed,
         }:
             return
-        
+
         if task.resume_status == TaskStatus.waiting_for_merge:
             await TaskRepository.set_waiting_for_merge(session, task_id, result=result)
             return

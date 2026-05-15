@@ -164,3 +164,28 @@ export interface ApiAgentInstance {
   updated_at: string;
   workspace: ApiWorkspace | null;
 }
+
+export interface ApiUser {
+  id: string;
+  github_login: string;
+  email: string | null;
+  balance: string;
+}
+
+export interface ApiRechargeRequest {
+  amount: string;
+}
+
+export interface ApiPurchaseAgentRequest {
+  agent: ApiAgentKind;
+}
+
+export interface ApiPurchaseAgentResponse {
+  id: string;
+  agent_instance_id: string;
+  agent: ApiAgentKind;
+  price: string;
+  balance: string;
+  purchased_at: string;
+  expires_at: string;
+}
