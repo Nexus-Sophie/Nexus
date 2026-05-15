@@ -14,6 +14,10 @@ export const WORKSPACE_NAV_ITEMS = [
     to: '/process-tracking',
   },
   {
+    label: 'Product Research',
+    to: '/product-research',
+  },
+  {
     label: 'Code Review',
     to: '/code-review',
     subItems: [

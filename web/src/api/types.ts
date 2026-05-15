@@ -67,6 +67,68 @@ export interface ApiTaskMessage {
   meta: Record<string, unknown> | null;
 }
 
+export type ApiProductProposalStatus =
+  | 'proposed'
+  | 'approved'
+  | 'rejected'
+  | 'planned';
+
+export type ApiFeatureStatus =
+  | 'planned'
+  | 'in_progress'
+  | 'completed'
+  | 'closed';
+
+export type ApiFeatureItemStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'completed'
+  | 'closed';
+
+export interface ApiProductProposalStatusUpdateRequest {
+  status: Extract<ApiProductProposalStatus, 'approved' | 'rejected' | 'planned'>;
+}
+
+export interface ApiProductProposal {
+  id: string;
+  title: string;
+  plan_type: string;
+  summary: string;
+  answer: string;
+  project: string | null;
+  repo: string | null;
+  status: ApiProductProposalStatus;
+  source_task_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiFeatureItem {
+  id: string;
+  feature_id: string;
+  order_index: number;
+  title: string;
+  description: string;
+  status: ApiFeatureItemStatus;
+  task_id: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface ApiFeature {
+  id: string;
+  proposal_id: string | null;
+  title: string;
+  description: string;
+  project: string | null;
+  status: ApiFeatureStatus;
+  created_at: string;
+  updated_at: string;
+  items: ApiFeatureItem[] | null;
+}
+
 export interface ApiWorkspace {
   id: string;
   agent_instance_id: string;
