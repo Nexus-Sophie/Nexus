@@ -6,7 +6,7 @@ const storageKey = 'nexus-language';
 
 function getInitialLanguage(): Language {
   if (typeof window === 'undefined') return defaultLanguage;
-  const storedLanguage = window.localStorage.getItem(storageKey);
+  const storedLanguage = localStorage.getItem(storageKey);
   return storedLanguage === 'en' || storedLanguage === 'zh' ? storedLanguage : defaultLanguage;
 }
 
@@ -20,7 +20,7 @@ i18n.use(initReactI18next).init({
 
 i18n.on('languageChanged', (language) => {
   if (language === 'zh' || language === 'en') {
-    window.localStorage.setItem(storageKey, language);
+    localStorage.setItem(storageKey, language);
     document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
   }
 });
