@@ -46,7 +46,7 @@ export default function ProductResearchPage() {
   }>();
   const { features, isLoading, loadError, proposals, reloadSnapshot } =
     useProductResearchSnapshot();
-  const [proposalFilter, setProposalFilter] = useState<ProposalFilter>('all');
+  const [proposalFilter, setProposalFilter] = useState<ProposalFilter>('accepted');
   const [proposalProjectFilter, setProposalProjectFilter] =
     useState<string>(ALL_PROJECTS);
   const [featureProjectFilter, setFeatureProjectFilter] =
