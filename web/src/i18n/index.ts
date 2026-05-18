@@ -5,7 +5,6 @@ import { defaultLanguage, resources, type Language } from './resources';
 const storageKey = 'nexus-language';
 
 function getInitialLanguage(): Language {
-  if (typeof window === 'undefined') return defaultLanguage;
   const storedLanguage = localStorage.getItem(storageKey);
   return storedLanguage === 'en' || storedLanguage === 'zh' ? storedLanguage : defaultLanguage;
 }
