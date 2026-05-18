@@ -701,13 +701,7 @@ class TaskRepository:
                 TaskRecord.category == TaskCategory.coding,
                 TaskRecord.repo.is_not(None),
                 TaskRecord.external_pull_request_url.is_not(None),
-                TaskRecord.status.in_(
-                    [
-                        TaskStatus.queued,
-                        TaskStatus.running,
-                        TaskStatus.waiting_for_review,
-                    ]
-                ),
+                TaskRecord.status == TaskStatus.waiting_for_review,
             )
             .order_by(TaskRecord.updated_at.asc(), TaskRecord.created_at.asc())
             .limit(limit)

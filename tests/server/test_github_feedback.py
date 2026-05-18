@@ -279,7 +279,7 @@ def test_poll_once_marks_merged_task_when_pull_request_is_merged(monkeypatch):
         repo="owner/repo",
         external_pull_request_url="https://github.com/owner/repo/pull/12",
         agent=SimpleNamespace(value="sophie"),
-        status=TaskStatus.waiting_for_merge,
+        status=TaskStatus.waiting_for_review,
         result="ready to merge",
         updated_at=datetime.fromisoformat("2024-01-10T00:00:00+00:00"),
     )
@@ -383,7 +383,7 @@ def test_poll_once_marks_task_closed_when_pull_request_is_closed_unmerged(monkey
     runner.dispatch_github_feedback.assert_not_awaited()
 
 
-def test_poll_once_does_not_promote_open_pull_request_to_waiting_for_merge(monkeypatch):
+def test_poll_once_leaves_open_pull_request_in_waiting_for_review(monkeypatch):
     task = SimpleNamespace(
         id=uuid.uuid4(),
         repo="owner/repo",
@@ -415,8 +415,11 @@ def test_poll_once_does_not_promote_open_pull_request_to_waiting_for_merge(monke
     async def fake_has_pending_newer_than(session, task_id, *, cutoff):
         return False
 
-    async def fail_set_waiting_for_merge(session, task_id, *, result):
-        raise AssertionError("open pull requests should not be auto-promoted to waiting_for_merge")
+    async def fail_set_merged(session, task_id):
+        raise AssertionError("open pull requests should not be auto-promoted to merged")
+
+    async def fail_set_closed(session, task_id):
+        raise AssertionError("open pull requests should not be auto-closed")
 
     monkeypatch.setattr(TaskRepository, "list_external_pull_request_candidates", fake_list_candidates)
     monkeypatch.setattr(GithubFeedbackPoller, "_fetch_pull_request", fake_fetch_pull_request)
@@ -427,7 +430,8 @@ def test_poll_once_does_not_promote_open_pull_request_to_waiting_for_merge(monke
         "has_pending_newer_than",
         fake_has_pending_newer_than,
     )
-    monkeypatch.setattr(TaskRepository, "set_waiting_for_merge", fail_set_waiting_for_merge)
+    monkeypatch.setattr(TaskRepository, "set_merged", fail_set_merged)
+    monkeypatch.setattr(TaskRepository, "set_closed", fail_set_closed)
 
     poller = GithubFeedbackPoller(
         settings=_make_settings(),

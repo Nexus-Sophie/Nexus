@@ -265,6 +265,7 @@ class GithubFeedbackPoller:
                 )
 
         return discovered_count
+    
     async def _resolve_viewer_login(
         self,
         client: httpx.AsyncClient,
