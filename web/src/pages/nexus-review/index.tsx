@@ -32,12 +32,12 @@ const QUEUE_TABS: QueueTab[] = [
   {
     id: 'review',
     label: 'Review',
-    statuses: ['waiting_for_review'],
+    statuses: ['waiting_for_review', 'waiting_for_merge'],
   },
   {
     id: 'merge',
     label: 'Merge',
-    statuses: ['waiting_for_merge', 'merged'],
+    statuses: ['merged'],
   },
   {
     id: 'close',
@@ -48,7 +48,7 @@ const QUEUE_TABS: QueueTab[] = [
 
 const CODE_REVIEW_BADGE_CLASS_NAMES: Partial<Record<WorkspaceTaskView['status'], string>> = {
   waiting_for_review: 'border-transparent bg-emerald-600 text-white hover:bg-emerald-600',
-  waiting_for_merge: 'border-transparent bg-violet-600 text-white hover:bg-violet-600',
+  waiting_for_merge: 'border-transparent bg-blue-600 text-white hover:bg-blue-600',
   merged: 'border-transparent bg-violet-100 text-violet-700 hover:bg-violet-100',
   closed: 'border-transparent bg-destructive text-destructive-foreground hover:bg-destructive',
 };
@@ -75,7 +75,10 @@ function deriveRepoOptions(tasks: WorkspaceTaskView[]): string[] {
 }
 
 function isReviewTask(task: WorkspaceTaskView): boolean {
-  return REVIEW_STATUSES.has(task.status) || Boolean(task.externalPullRequestUrl);
+  return (
+    task.category === 'coding' &&
+    (REVIEW_STATUSES.has(task.status) || Boolean(task.externalPullRequestUrl))
+  );
 }
 
 function sortNewestFirst(tasks: WorkspaceTaskView[]): WorkspaceTaskView[] {
