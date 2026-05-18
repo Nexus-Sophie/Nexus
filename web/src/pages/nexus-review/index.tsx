@@ -17,7 +17,6 @@ import { TaskBoardRepoSelect } from '@/pages/task-board/components/TaskBoardRepo
 const ALL_REPOSITORIES = 'All repositories';
 const REVIEW_STATUSES = new Set<WorkspaceTaskView['status']>([
   'waiting_for_review',
-  'waiting_for_merge',
   'merged',
   'closed',
 ]);
@@ -32,7 +31,7 @@ const QUEUE_TABS: QueueTab[] = [
   {
     id: 'review',
     label: 'Review',
-    statuses: ['waiting_for_review', 'waiting_for_merge'],
+    statuses: ['waiting_for_review'],
   },
   {
     id: 'merge',
@@ -48,7 +47,6 @@ const QUEUE_TABS: QueueTab[] = [
 
 const CODE_REVIEW_BADGE_CLASS_NAMES: Partial<Record<WorkspaceTaskView['status'], string>> = {
   waiting_for_review: 'border-transparent bg-emerald-600 text-white hover:bg-emerald-600',
-  waiting_for_merge: 'border-transparent bg-blue-600 text-white hover:bg-blue-600',
   merged: 'border-transparent bg-violet-100 text-violet-700 hover:bg-violet-100',
   closed: 'border-transparent bg-destructive text-destructive-foreground hover:bg-destructive',
 };

@@ -33,7 +33,6 @@ class TaskStatus(str, enum.Enum):
     queued = "queued"
     running = "running"
     waiting_for_review = "waiting_for_review"
-    waiting_for_merge = "waiting_for_merge"
     merged = "merged"
     closed = "closed"
     failed = "failed"

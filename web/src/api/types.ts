@@ -6,7 +6,6 @@ export type ApiTaskStatus =
   | 'queued'
   | 'running'
   | 'waiting_for_review'
-  | 'waiting_for_merge'
   | 'merged'
   | 'closed'
   | 'failed';

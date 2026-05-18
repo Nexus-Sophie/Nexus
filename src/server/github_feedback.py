@@ -165,7 +165,7 @@ class GithubFeedbackPoller:
         if not pull_request:
             return 0
 
-        if task.status in {TaskStatus.waiting_for_review, TaskStatus.waiting_for_merge}:
+        if task.status == TaskStatus.waiting_for_review:
             # Once a reviewable task is backed by a real GitHub PR, GitHub becomes the
             # source of truth for terminal PR outcomes:
             # - merged PR -> merged task

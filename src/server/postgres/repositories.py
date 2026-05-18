@@ -52,7 +52,6 @@ class AgentInstanceRepository:
             TaskStatus.queued,
             TaskStatus.running,
             TaskStatus.waiting_for_review,
-            TaskStatus.waiting_for_merge,
         ]
         load_query = (
             select(
@@ -131,7 +130,6 @@ class AgentInstanceRepository:
                         TaskStatus.queued,
                         TaskStatus.running,
                         TaskStatus.waiting_for_review,
-                        TaskStatus.waiting_for_merge,
                     ]
                 ),
             )
@@ -708,7 +706,6 @@ class TaskRepository:
                         TaskStatus.queued,
                         TaskStatus.running,
                         TaskStatus.waiting_for_review,
-                        TaskStatus.waiting_for_merge,
                     ]
                 ),
             )
@@ -741,7 +738,6 @@ class TaskRepository:
                     TaskRecord.status.in_(
                         [
                             TaskStatus.waiting_for_review,
-                            TaskStatus.waiting_for_merge,
                             TaskStatus.merged,
                             TaskStatus.closed,
                         ]
@@ -968,11 +964,10 @@ class TaskRepository:
         task = await session.get(TaskRecord, task_id)
         if task is None:
             return None
-        if task.status not in {TaskStatus.waiting_for_review, TaskStatus.waiting_for_merge}:
+        if task.status != TaskStatus.waiting_for_review:
             return None
 
         now = utc_now()
-        task.resume_status = task.status
         task.status = TaskStatus.queued
         task.error = None
         task.finished_at = None
@@ -994,7 +989,7 @@ class TaskRepository:
         if task is None:
             return None
 
-        task.status = task.resume_status or TaskStatus.waiting_for_review
+        task.status = TaskStatus.waiting_for_review
         task.resume_status = None
         task.error = error
         task.finished_at = None
@@ -1018,30 +1013,6 @@ class TaskRepository:
 
         now = utc_now()
         task.status = TaskStatus.waiting_for_review
-        task.result = result
-        task.error = None
-        task.finished_at = None
-        task.resume_status = None
-        task.updated_at = now
-        task.dispatch_token = None
-        task.lease_expires_at = None
-        await session.commit()
-        await session.refresh(task)
-        return task
-
-    @staticmethod
-    async def set_waiting_for_merge(
-        session: AsyncSession,
-        task_id: uuid.UUID,
-        *,
-        result: str | None,
-    ) -> TaskRecord | None:
-        task = await session.get(TaskRecord, task_id)
-        if task is None:
-            return None
-
-        now = utc_now()
-        task.status = TaskStatus.waiting_for_merge
         task.result = result
         task.error = None
         task.finished_at = None

@@ -160,10 +160,19 @@ class Database:
             )
             await conn.execute(text("ALTER TABLE task ALTER COLUMN status SET DEFAULT 'queued'"))
             await conn.execute(
-                text("UPDATE task SET status = 'waiting_for_merge' WHERE status = 'completed'")
+                text("UPDATE task SET status = 'waiting_for_review' WHERE status = 'completed'")
             )
             await conn.execute(
                 text("UPDATE task SET status = 'waiting_for_review' WHERE status = 'waiting'")
+            )
+            await conn.execute(
+                text("UPDATE task SET status = 'waiting_for_review' WHERE status = 'waiting_for_merge'")
+            )
+            await conn.execute(
+                text(
+                    "UPDATE task SET resume_status = 'waiting_for_review' "
+                    "WHERE resume_status = 'waiting_for_merge'"
+                )
             )
             await conn.execute(
                 text(

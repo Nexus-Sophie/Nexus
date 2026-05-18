@@ -13,7 +13,6 @@ export function TaskBoardTaskCard({
 }: TaskBoardTaskCardProps) {
   const canOpenReview =
     task.status === 'waiting_for_review' ||
-    task.status === 'waiting_for_merge' ||
     task.status === 'merged' ||
     task.status === 'closed' ||
     Boolean(task.externalPullRequestUrl);
