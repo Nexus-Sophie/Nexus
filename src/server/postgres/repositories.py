@@ -359,6 +359,35 @@ class ProductProposalRepository:
         await session.refresh(proposal)
         return proposal
 
+    @staticmethod
+    async def sync_status_from_features(
+        session: AsyncSession,
+        proposal_id: uuid.UUID,
+    ) -> ProductProposalRecord | None:
+        # Proposal completion is derived from its linked features rather than set directly.
+        proposal = await session.get(ProductProposalRecord, proposal_id)
+        if proposal is None:
+            return None
+        if proposal.status == ProductProposalStatus.rejected:
+            return proposal
+
+        result = await session.execute(
+            select(FeatureRecord.status).where(FeatureRecord.proposal_id == proposal_id)
+        )
+        feature_statuses = list(result.scalars().all())
+        if not feature_statuses:
+            return proposal
+
+        next_status = (
+            ProductProposalStatus.completed
+            if all(status in {FeatureStatus.completed, FeatureStatus.closed} for status in feature_statuses)
+            else ProductProposalStatus.planned
+        )
+        if proposal.status != next_status:
+            proposal.status = next_status
+            proposal.updated_at = utc_now()
+        return proposal
+
 
 class FeatureRepository:
     @staticmethod
@@ -388,49 +417,6 @@ class FeatureRepository:
         await session.refresh(feature)
         return feature
 
-    @staticmethod
-    async def create_with_items(
-        session: AsyncSession,
-        *,
-        proposal_id: uuid.UUID | None,
-        title: str,
-        description: str,
-        project: str | None,
-        items: list[dict[str, str]],
-    ) -> tuple[FeatureRecord, list[FeatureItemRecord]]:
-        feature = FeatureRecord(
-            proposal_id=proposal_id,
-            title=title,
-            description=description,
-            project=project,
-            status=FeatureStatus.planned,
-        )
-        session.add(feature)
-        await session.flush()
-        feature_items = [
-            FeatureItemRecord(
-                feature_id=feature.id,
-                order_index=index,
-                title=item["title"],
-                description=item["description"],
-                status=FeatureItemStatus.pending,
-            )
-            for index, item in enumerate(items, start=1)
-        ]
-        session.add_all(feature_items)
-        await session.flush()
-        if proposal_id is not None:
-            proposal = await session.get(ProductProposalRecord, proposal_id)
-            if proposal is not None:
-                proposal.status = ProductProposalStatus.planned
-                proposal.updated_at = utc_now()
-        await session.commit()
-        await session.refresh(feature)
-        for item in feature_items:
-            await session.refresh(item)
-        return feature, feature_items
-
-    @staticmethod
     async def get(session: AsyncSession, feature_id: uuid.UUID) -> FeatureRecord | None:
         return await session.get(FeatureRecord, feature_id)
 
@@ -452,18 +438,34 @@ class FeatureRepository:
         return list(result.scalars().all())
 
     @staticmethod
-    async def set_status(
+    async def sync_status_from_items(
         session: AsyncSession,
         feature_id: uuid.UUID,
-        status: FeatureStatus,
     ) -> FeatureRecord | None:
         feature = await session.get(FeatureRecord, feature_id)
         if feature is None:
             return None
-        feature.status = status
-        feature.updated_at = utc_now()
-        await session.commit()
-        await session.refresh(feature)
+
+        result = await session.execute(
+            select(FeatureItemRecord.status).where(FeatureItemRecord.feature_id == feature_id)
+        )
+        item_statuses = list(result.scalars().all())
+        if not item_statuses:
+            return feature
+
+        next_status = (
+            FeatureStatus.completed
+            if all(status in {FeatureItemStatus.completed, FeatureItemStatus.closed} for status in item_statuses)
+            else FeatureStatus.in_progress
+            if any(status == FeatureItemStatus.in_progress for status in item_statuses)
+            else FeatureStatus.planned
+        )
+        if feature.status != next_status:
+            feature.status = next_status
+            feature.updated_at = utc_now()
+        if feature.proposal_id is not None:
+            # Feature-item progress rolls the parent feature forward, which can also advance the parent proposal.
+            await ProductProposalRepository.sync_status_from_features(session, feature.proposal_id)
         return feature
 
 
@@ -543,11 +545,12 @@ class FeatureItemRepository:
             )
             .returning(FeatureItemRecord)
         )
-        result: CursorResult[Any] = cast(CursorResult[Any], await session.execute(stmt))
+        result = await session.execute(stmt)
         item = result.scalar_one_or_none()
         if item is None:
             await session.rollback()
             return None
+        await FeatureRepository.sync_status_from_items(session, item.feature_id)
         await session.commit()
         return item
 
@@ -573,6 +576,8 @@ class FeatureItemRepository:
             status=FeatureItemStatus.pending,
         )
         session.add(item)
+        await session.flush()
+        await FeatureRepository.sync_status_from_items(session, feature_id)
         await session.commit()
         await session.refresh(item)
         return item
@@ -587,26 +592,6 @@ class FeatureItemRepository:
         result = await session.execute(query)
         return list(result.scalars().all())
 
-    @staticmethod
-    async def set_status(
-        session: AsyncSession,
-        item_id: uuid.UUID,
-        status: FeatureItemStatus,
-    ) -> FeatureItemRecord | None:
-        item = await session.get(FeatureItemRecord, item_id)
-        if item is None:
-            return None
-        item.status = status
-        item.updated_at = utc_now()
-        if status == FeatureItemStatus.in_progress and item.started_at is None:
-            item.started_at = utc_now()
-        if status in {FeatureItemStatus.completed, FeatureItemStatus.closed}:
-            item.finished_at = utc_now()
-        await session.commit()
-        await session.refresh(item)
-        return item
-
-    @staticmethod
     async def set_status_by_task_id(
         session: AsyncSession,
         task_id: uuid.UUID,
@@ -618,6 +603,7 @@ class FeatureItemRepository:
             select(FeatureItemRecord).where(FeatureItemRecord.task_id == task_id)
         )
         items = list(result.scalars().all())
+        affected_feature_ids: set[uuid.UUID] = set()
         for item in items:
             item.status = status
             item.updated_at = updated_at
@@ -625,6 +611,9 @@ class FeatureItemRepository:
                 item.started_at = updated_at
             if status in {FeatureItemStatus.completed, FeatureItemStatus.closed}:
                 item.finished_at = updated_at
+            affected_feature_ids.add(item.feature_id)
+        for feature_id in affected_feature_ids:
+            await FeatureRepository.sync_status_from_items(session, feature_id)
         await session.commit()
         return items
 
@@ -815,7 +804,7 @@ class TaskRepository:
             .returning(TaskRecord)
         )
 
-        result: CursorResult[Any] = cast(CursorResult[Any], await session.execute(stmt))
+        result = await session.execute(stmt)
         task = result.scalar_one_or_none()
         if task is None:
             await session.rollback()
@@ -856,7 +845,7 @@ class TaskRepository:
         )
 
         try:
-            result: CursorResult[Any] = cast(CursorResult[Any], await session.execute(stmt))
+            result = await session.execute(stmt)
             task = result.scalar_one_or_none()
             if task is None:
                 await session.rollback()

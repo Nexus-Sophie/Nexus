@@ -72,6 +72,7 @@ class ProductProposalStatus(str, enum.Enum):
     approved = "approved"
     rejected = "rejected"
     planned = "planned"
+    completed = "completed"
 
 
 class FeatureStatus(str, enum.Enum):

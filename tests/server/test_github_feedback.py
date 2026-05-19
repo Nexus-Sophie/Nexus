@@ -16,6 +16,7 @@ from src.server.postgres.models import (
     TaskStatus,
 )
 from src.server.postgres.repositories import (
+    FeatureRepository,
     GithubPullRequestFeedbackRepository,
     TaskRepository,
 )
@@ -287,6 +288,7 @@ def test_poll_once_marks_merged_task_when_pull_request_is_merged(monkeypatch):
     captured = {}
     item = SimpleNamespace(
         id=uuid.uuid4(),
+        feature_id=uuid.uuid4(),
         task_id=task.id,
         status=FeatureItemStatus.in_progress,
         updated_at=datetime.fromisoformat("2024-01-09T00:00:00+00:00"),
@@ -309,9 +311,14 @@ def test_poll_once_marks_merged_task_when_pull_request_is_merged(monkeypatch):
             updated_at=datetime.fromisoformat("2024-01-11T00:00:00+00:00"),
         )
 
+    async def fake_sync_feature_status(session, feature_id):
+        assert feature_id == item.feature_id
+        return None
+
     monkeypatch.setattr(TaskRepository, "list_external_pull_request_candidates", fake_list_candidates)
     monkeypatch.setattr(GithubFeedbackPoller, "_fetch_pull_request", fake_fetch_pull_request)
     monkeypatch.setattr(TaskRepository, "set_merged", fake_set_merged)
+    monkeypatch.setattr(FeatureRepository, "sync_status_from_items", fake_sync_feature_status)
 
     poller = GithubFeedbackPoller(
         settings=_make_settings(),
@@ -342,6 +349,7 @@ def test_poll_once_marks_task_closed_when_pull_request_is_closed_unmerged(monkey
     captured = {}
     item = SimpleNamespace(
         id=uuid.uuid4(),
+        feature_id=uuid.uuid4(),
         task_id=task.id,
         status=FeatureItemStatus.in_progress,
         updated_at=datetime.fromisoformat("2024-01-09T00:00:00+00:00"),
@@ -364,9 +372,14 @@ def test_poll_once_marks_task_closed_when_pull_request_is_closed_unmerged(monkey
             updated_at=datetime.fromisoformat("2024-01-11T00:00:00+00:00"),
         )
 
+    async def fake_sync_feature_status(session, feature_id):
+        assert feature_id == item.feature_id
+        return None
+
     monkeypatch.setattr(TaskRepository, "list_external_pull_request_candidates", fake_list_candidates)
     monkeypatch.setattr(GithubFeedbackPoller, "_fetch_pull_request", fake_fetch_pull_request)
     monkeypatch.setattr(TaskRepository, "set_closed", fake_set_closed)
+    monkeypatch.setattr(FeatureRepository, "sync_status_from_items", fake_sync_feature_status)
 
     poller = GithubFeedbackPoller(
         settings=_make_settings(),

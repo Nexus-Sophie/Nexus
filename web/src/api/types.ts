@@ -70,7 +70,8 @@ export type ApiProductProposalStatus =
   | 'proposed'
   | 'approved'
   | 'rejected'
-  | 'planned';
+  | 'planned'
+  | 'completed';
 
 export type ApiFeatureStatus =
   | 'planned'

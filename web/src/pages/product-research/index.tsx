@@ -65,7 +65,11 @@ export default function ProductResearchPage() {
       return true;
     }
     if (proposalFilter === 'accepted') {
-      return proposal.status === 'approved' || proposal.status === 'planned';
+      return (
+        proposal.status === 'approved' ||
+        proposal.status === 'planned' ||
+        proposal.status === 'completed'
+      );
     }
     return proposal.status === proposalFilter;
   });
@@ -118,7 +122,8 @@ export default function ProductResearchPage() {
     if (
       proposalId &&
       (selectedProposal?.status === 'approved' ||
-        selectedProposal?.status === 'planned')
+        selectedProposal?.status === 'planned' ||
+        selectedProposal?.status === 'completed')
     ) {
       setProposalFilter('accepted');
       return;

@@ -180,6 +180,21 @@ class Database:
                     "WHERE status = 'changes_requested'"
                 )
             )
+            await conn.execute(
+                text(
+                    "UPDATE product_proposal p "
+                    "SET status = CASE "
+                    "WHEN EXISTS (SELECT 1 FROM feature f WHERE f.proposal_id = p.id) "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM feature f "
+                    "WHERE f.proposal_id = p.id AND f.status NOT IN ('completed', 'closed')"
+                    ") THEN 'completed' "
+                    "WHEN EXISTS (SELECT 1 FROM feature f WHERE f.proposal_id = p.id) THEN 'planned' "
+                    "ELSE p.status "
+                    "END "
+                    "WHERE p.status <> 'rejected'"
+                )
+            )
             await conn.execute(text("ALTER TABLE user_account ADD COLUMN IF NOT EXISTS balance NUMERIC(12, 2) DEFAULT 0.00 NOT NULL"))
             await conn.execute(
                 text(
