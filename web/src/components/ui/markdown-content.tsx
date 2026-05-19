@@ -13,6 +13,11 @@ import { cn } from '@/lib/utils';
 const GITHUB_MARKDOWN_MONO_FAMILY =
   'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace';
 
+const GITHUB_MARKDOWN_HEADING_STYLE: CSSProperties = {
+  fontFamily:
+    'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"',
+};
+
 const MARKDOWN_SHIKI_THEME = 'github-light';
 
 const MARKDOWN_LANGUAGE_ALIASES: Record<string, BundledLanguage> = {
@@ -233,31 +238,37 @@ const MARKDOWN_OPTIONS = {
     h1: {
       props: {
         className: 'mb-3 last:mb-0 text-base font-normal text-foreground',
+        style: GITHUB_MARKDOWN_HEADING_STYLE,
       },
     },
     h2: {
       props: {
         className: 'mb-3 last:mb-0 text-base font-normal text-foreground',
+        style: GITHUB_MARKDOWN_HEADING_STYLE,
       },
     },
     h3: {
       props: {
         className: 'mb-3 last:mb-0 text-sm font-normal text-foreground',
+        style: GITHUB_MARKDOWN_HEADING_STYLE,
       },
     },
     h4: {
       props: {
         className: 'mb-3 last:mb-0 text-sm font-normal text-foreground',
+        style: GITHUB_MARKDOWN_HEADING_STYLE,
       },
     },
     h5: {
       props: {
         className: 'mb-3 last:mb-0 text-sm font-normal text-foreground',
+        style: GITHUB_MARKDOWN_HEADING_STYLE,
       },
     },
     h6: {
       props: {
         className: 'mb-3 last:mb-0 text-sm font-normal text-foreground',
+        style: GITHUB_MARKDOWN_HEADING_STYLE,
       },
     },
     hr: {
@@ -330,6 +341,7 @@ export function MarkdownContent({
     return (
       <p
         className={cn('text-sm leading-relaxed text-foreground break-words', className)}
+        style={GITHUB_MARKDOWN_HEADING_STYLE}
       >
         {emptyState}
       </p>
@@ -339,6 +351,7 @@ export function MarkdownContent({
   return (
     <div
       className={cn('text-sm leading-relaxed text-foreground break-words', className)}
+      style={GITHUB_MARKDOWN_HEADING_STYLE}
     >
       <Markdown options={MARKDOWN_OPTIONS}>{trimmedContent}</Markdown>
     </div>
