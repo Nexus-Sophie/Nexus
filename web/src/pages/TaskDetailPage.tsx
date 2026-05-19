@@ -247,7 +247,7 @@ export default function TaskDetailPage() {
                   {config.icon}
                 </div>
                 <div>
-                  <h1 className="text-lg font-semibold text-slate-900 dark:text-white">
+                  <h1 className="text-lg font-normal text-slate-900 dark:text-white title-clamp-2">
                     {task.title}
                   </h1>
                   <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">

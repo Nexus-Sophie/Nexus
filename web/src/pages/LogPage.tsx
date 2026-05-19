@@ -135,7 +135,7 @@ function TaskListItem({ task, isSelected, onClick }: TaskListItemProps) {
         <div className="flex-1 min-w-0">
           {/* Title */}
           <h3 className={cn(
-            "font-medium text-sm leading-tight mb-1 pr-2",
+            "text-sm leading-snug mb-1 pr-2 font-normal title-clamp-2",
             isSelected ? "text-blue-700 dark:text-blue-300" : "text-slate-900 dark:text-slate-100"
           )}>
             {task.title}
