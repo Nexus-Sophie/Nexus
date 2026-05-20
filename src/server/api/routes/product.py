@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from src.server.api.dependencies import get_current_user
 from src.server.postgres.database import Database
 from src.server.postgres.models import (
     AgentName,
+    ProductProposalRecord,
     ProductProposalStatus,
     FeatureStatus,
+    UserRecord,
+    WorkspaceRecord,
 )
 from src.server.postgres.repositories import (
     AgentInstanceRepository,
@@ -16,6 +20,7 @@ from src.server.postgres.repositories import (
     FeatureItemRepository,
     FeatureRepository,
     TaskRepository,
+    WorkspaceRepository,
 )
 from src.server.runner import AgentTaskRunner
 from src.server.schemas import (
@@ -30,13 +35,43 @@ from src.server.schemas import (
 router = APIRouter(prefix="/v1/product", tags=["product"])
 
 
+def _proposal_accessible_to_user_workspaces(
+    proposal: ProductProposalRecord,
+    workspaces: list[WorkspaceRecord],
+) -> bool:
+    """Check whether a proposal belongs to one of the user's workspaces.
+
+    Product proposals do not store user ownership directly. A user can access a
+    proposal only when the proposal's repo/project pair matches a workspace owned
+    by one of the user's agent instances.
+
+    Args:
+        proposal: Product proposal being accessed.
+        workspaces: Workspaces owned by the current user's agent instances.
+
+    Returns:
+        True when the proposal repo/project is visible to the user; otherwise False.
+    """
+    return any(
+        workspace.github_repo == proposal.repo and workspace.project == proposal.project
+        for workspace in workspaces
+    )
+
+
 @router.post("/proposals", response_model=ProductProposalResponse, status_code=201)
 async def create_proposal(
     request: Request,
     payload: ProductProposalCreateRequest,
+    user: UserRecord = Depends(get_current_user),
 ) -> ProductProposalResponse:
     database: Database = request.app.state.database
     async with database.session() as session:
+        # Product proposals do not store a user_id directly. Access is derived from
+        # the current user's agent workspaces, so users may only create proposals
+        # for repo/project pairs that one of their agent instances owns.
+        workspaces = await WorkspaceRepository.list_for_user(session, user_id=user.id)
+        if not any(workspace.github_repo == payload.repo and workspace.project == payload.project for workspace in workspaces):
+            raise HTTPException(status_code=403, detail="Repo/project is not available for this user")
         proposal = await ProductProposalRepository.create(
             session,
             title=payload.title,
@@ -57,14 +92,17 @@ async def list_proposals(
     project: str | None = Query(default=None),
     repo: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
+    user: UserRecord = Depends(get_current_user),
 ) -> list[ProductProposalResponse]:
     database: Database = request.app.state.database
     async with database.session() as session:
+        workspaces = await WorkspaceRepository.list_for_user(session, user_id=user.id)
         proposals = await ProductProposalRepository.list(
             session,
             status=status,
             project=project,
             repo=repo,
+            workspaces=workspaces,
             limit=limit,
         )
     return [ProductProposalResponse.from_record(proposal) for proposal in proposals]
@@ -74,11 +112,13 @@ async def list_proposals(
 async def get_proposal(
     request: Request,
     proposal_id: uuid.UUID,
+    user: UserRecord = Depends(get_current_user),
 ) -> ProductProposalResponse:
     database: Database = request.app.state.database
     async with database.session() as session:
         proposal = await ProductProposalRepository.get(session, proposal_id)
-    if proposal is None:
+        workspaces = await WorkspaceRepository.list_for_user(session, user_id=user.id)
+    if proposal is None or not _proposal_accessible_to_user_workspaces(proposal, workspaces):
         raise HTTPException(status_code=404, detail="Proposal not found")
     return ProductProposalResponse.from_record(proposal)
 
@@ -88,11 +128,13 @@ async def update_proposal_status(
     request: Request,
     proposal_id: uuid.UUID,
     payload: ProductProposalStatusUpdateRequest,
+    user: UserRecord = Depends(get_current_user),
 ) -> ProductProposalResponse:
     database: Database = request.app.state.database
     async with database.session() as session:
         existing = await ProductProposalRepository.get(session, proposal_id)
-        if existing is None:
+        workspaces = await WorkspaceRepository.list_for_user(session, user_id=user.id)
+        if existing is None or not _proposal_accessible_to_user_workspaces(existing, workspaces):
             raise HTTPException(status_code=404, detail="Proposal not found")
         previous_status = existing.status
         proposal = await ProductProposalRepository.set_status(session, proposal_id, payload.status)
@@ -111,6 +153,9 @@ async def update_proposal_status(
             marc_instances = await AgentInstanceRepository.list_by_active_task_load(
                 session,
                 agent=AgentName.marc,
+                user_id=user.id,
+                github_repo=proposal.repo,
+                project=proposal.project,
                 limit=1,
             )
         if not marc_instances:
@@ -146,13 +191,16 @@ async def list_features(
     status: FeatureStatus | None = Query(default=None),
     project: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
+    user: UserRecord = Depends(get_current_user),
 ) -> list[FeatureResponse]:
     database: Database = request.app.state.database
     async with database.session() as session:
+        workspaces = await WorkspaceRepository.list_for_user(session, user_id=user.id)
         features = await FeatureRepository.list(
             session,
             status=status,
             project=project,
+            workspaces=workspaces,
             limit=limit,
         )
     return [FeatureResponse.from_record(feature) for feature in features]
@@ -162,11 +210,18 @@ async def list_features(
 async def get_feature(
     request: Request,
     feature_id: uuid.UUID,
+    user: UserRecord = Depends(get_current_user),
 ) -> FeatureResponse:
     database: Database = request.app.state.database
     async with database.session() as session:
         feature = await FeatureRepository.get(session, feature_id)
         if feature is None:
+            raise HTTPException(status_code=404, detail="Feature not found")
+        if feature.proposal_id is None:
+            raise HTTPException(status_code=404, detail="Feature not found")
+        proposal = await ProductProposalRepository.get(session, feature.proposal_id)
+        workspaces = await WorkspaceRepository.list_for_user(session, user_id=user.id)
+        if proposal is None or not _proposal_accessible_to_user_workspaces(proposal, workspaces):
             raise HTTPException(status_code=404, detail="Feature not found")
         items = await FeatureItemRepository.list_by_feature(session, feature_id)
     return FeatureResponse.from_record(feature, items=items)

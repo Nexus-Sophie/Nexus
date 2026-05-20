@@ -20,9 +20,12 @@ from src.tools.product import ProductTools
 
 
 class FakeDatabase:
+    def __init__(self, session_obj="session"):
+        self._session_obj = session_obj
+
     @asynccontextmanager
     async def session(self):
-        yield "session"
+        yield self._session_obj
 
 
 class FakeSession:
@@ -90,6 +93,7 @@ def _proposal(**overrides):
         "project": "nexus",
         "repo": "owner/repo",
         "status": ProductProposalStatus.proposed,
+        "user_id": uuid.uuid4(),
         "source_task_id": uuid.uuid4(),
         "created_at": now,
         "updated_at": now,
@@ -278,7 +282,7 @@ def test_create_feature_for_product_proposal_from_planned_proposal(monkeypatch):
     feature = _feature(id=uuid.uuid4(), proposal_id=proposal_id)
 
     async def fake_get(session, pid):
-        return _proposal(id=pid, status=ProductProposalStatus.planned)
+        return _proposal(id=pid, user_id=uuid.uuid4(), status=ProductProposalStatus.planned)
 
     async def fake_create(session, **kwargs):
         return feature

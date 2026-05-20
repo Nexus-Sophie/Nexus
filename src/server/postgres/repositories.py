@@ -46,6 +46,9 @@ class AgentInstanceRepository:
         session: AsyncSession,
         *,
         agent: AgentName,
+        user_id: uuid.UUID | None = None,
+        github_repo: str | None = None,
+        project: str | None = None,
         limit: int = 100,
     ) -> list[AgentInstanceRecord]:
         active_statuses = [
@@ -72,9 +75,18 @@ class AgentInstanceRepository:
                 AgentInstanceRecord.agent == agent,
                 AgentInstanceRecord.is_active.is_(True),
             )
-            .order_by(func.coalesce(load_query.c.active_task_count, 0).asc(), AgentInstanceRecord.created_at.asc())
-            .limit(limit)
         )
+        if user_id is not None:
+            query = query.where(AgentInstanceRecord.user_id == user_id)
+        if github_repo is not None or project is not None:
+            query = query.join(WorkspaceRecord, WorkspaceRecord.agent_instance_id == AgentInstanceRecord.id).where(
+                WorkspaceRecord.github_repo == github_repo,
+                WorkspaceRecord.project == project,
+            )
+        query = query.order_by(
+            func.coalesce(load_query.c.active_task_count, 0).asc(),
+            AgentInstanceRecord.created_at.asc(),
+        ).limit(limit)
         result = await session.execute(query)
         return list(result.scalars().all())
 
@@ -85,9 +97,11 @@ class AgentInstanceRepository:
         agent: AgentName,
         client_id: str,
         display_name: str | None,
+        user_id: uuid.UUID,
         is_active: bool = True,
     ) -> AgentInstanceRecord:
         instance = AgentInstanceRecord(
+            user_id=user_id,
             agent=agent,
             client_id=client_id,
             display_name=display_name,
@@ -148,9 +162,12 @@ class AgentInstanceRepository:
         agent: AgentName | None = None,
         client_id: str | None = None,
         is_active: bool | None = None,
+        user_id: uuid.UUID | None = None,
         limit: int = 500,
     ) -> list[AgentInstanceRecord]:
         query = select(AgentInstanceRecord)
+        if user_id is not None:
+            query = query.where(AgentInstanceRecord.user_id == user_id)
         if agent is not None:
             query = query.where(AgentInstanceRecord.agent == agent)
         if client_id is not None:
@@ -168,7 +185,7 @@ class AgentInstanceRepository:
         *,
         is_active: bool,
     ) -> AgentInstanceRecord | None:
-        instance = await session.get(AgentInstanceRecord, instance_id)
+        instance = await AgentInstanceRepository.get(session, instance_id)
         if instance is None:
             return None
         instance.is_active = is_active
@@ -187,6 +204,20 @@ class WorkspaceRepository:
         query = select(WorkspaceRecord).where(WorkspaceRecord.agent_instance_id == agent_instance_id)
         result = await session.execute(query)
         return result.scalar_one_or_none()
+
+    @staticmethod
+    async def list_for_user(
+        session: AsyncSession,
+        *,
+        user_id: uuid.UUID,
+    ) -> list[WorkspaceRecord]:
+        query = (
+            select(WorkspaceRecord)
+            .join(AgentInstanceRecord, AgentInstanceRecord.id == WorkspaceRecord.agent_instance_id)
+            .where(AgentInstanceRecord.user_id == user_id)
+        )
+        result = await session.execute(query)
+        return list(result.scalars().all())
 
     @staticmethod
     async def ensure_for_agent_instance(
@@ -330,9 +361,21 @@ class ProductProposalRepository:
         status: ProductProposalStatus | None = None,
         project: str | None = None,
         repo: str | None = None,
+        workspaces: list[WorkspaceRecord] | None = None,
         limit: int = 200,
     ) -> list[ProductProposalRecord]:
         query = select(ProductProposalRecord)
+        if workspaces is not None:
+            if not workspaces:
+                return []
+            query = query.where(
+                or_(
+                    *(
+                        and_(ProductProposalRecord.repo == workspace.github_repo, ProductProposalRecord.project == workspace.project)
+                        for workspace in workspaces
+                    )
+                )
+            )
         if status is not None:
             query = query.where(ProductProposalRecord.status == status)
         if project is not None:
@@ -425,9 +468,21 @@ class FeatureRepository:
         *,
         status: FeatureStatus | None = None,
         project: str | None = None,
+        workspaces: list[WorkspaceRecord] | None = None,
         limit: int = 200,
     ) -> list[FeatureRecord]:
         query = select(FeatureRecord)
+        if workspaces is not None:
+            if not workspaces:
+                return []
+            query = query.join(ProductProposalRecord, ProductProposalRecord.id == FeatureRecord.proposal_id).where(
+                or_(
+                    *(
+                        and_(ProductProposalRecord.repo == workspace.github_repo, ProductProposalRecord.project == workspace.project)
+                        for workspace in workspaces
+                    )
+                )
+            )
         if status is not None:
             query = query.where(FeatureRecord.status == status)
         if project is not None:
@@ -497,6 +552,17 @@ class FeatureItemRepository:
     async def get_repo(session: AsyncSession, item_id: uuid.UUID) -> str | None:
         query = (
             select(ProductProposalRecord.repo)
+            .join(FeatureRecord, FeatureRecord.proposal_id == ProductProposalRecord.id)
+            .join(FeatureItemRecord, FeatureItemRecord.feature_id == FeatureRecord.id)
+            .where(FeatureItemRecord.id == item_id)
+        )
+        result = await session.execute(query)
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_proposal(session: AsyncSession, item_id: uuid.UUID) -> ProductProposalRecord | None:
+        query = (
+            select(ProductProposalRecord)
             .join(FeatureRecord, FeatureRecord.proposal_id == ProductProposalRecord.id)
             .join(FeatureItemRecord, FeatureItemRecord.feature_id == FeatureRecord.id)
             .where(FeatureItemRecord.id == item_id)
@@ -658,9 +724,14 @@ class TaskRepository:
         category: TaskCategory | None = None,
         repo: str | None = None,
         project: str | None = None,
+        user_id: uuid.UUID | None = None,
         limit: int = 200,
     ) -> list[TaskRecord]:
         query = select(TaskRecord)
+        if user_id is not None:
+            query = query.join(AgentInstanceRecord, AgentInstanceRecord.id == TaskRecord.agent_instance_id).where(
+                AgentInstanceRecord.user_id == user_id
+            )
 
         if agent_instance_id is not None:
             query = query.where(TaskRecord.agent_instance_id == agent_instance_id)
@@ -1573,6 +1644,7 @@ class AgentPurchaseRepository:
             user.balance -= price
             user.updated_at = utc_now()
             agent_instance = AgentInstanceRecord(
+                user_id=user_id,
                 agent=agent,
                 client_id=f"purchase-{user_id.hex[:8]}-{uuid.uuid4().hex[:8]}",
                 display_name=f"{agent.value.title()} subscription",
