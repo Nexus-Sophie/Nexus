@@ -179,6 +179,9 @@ class AgentInstanceRecord(Base):
 
 
 class WorkspaceRecord(Base):
+    # Workspace is the durable per-agent-instance context chosen by the frontend.
+    # It owns the repo/project binding; workers may transition status, but they
+    # must not rewrite github_repo/project during task execution.
     __tablename__ = "workspace"
     __table_args__ = (
         UniqueConstraint("agent_instance_id", name="uq_workspace_agent_instance_id"),
@@ -259,9 +262,13 @@ class TaskRecord(Base):
         server_default=TaskCategory.coding.value,
     )
     question: Mapped[str] = mapped_column(Text, nullable=False)
+    # These fields are kept for backward compatibility with older rows and APIs.
+    # New execution should resolve repo/project from WorkspaceRecord instead.
     repo: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     project: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     external_issue_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # Unlike repo/project, the external PR URL remains task-scoped because GitHub
+    # feedback resumes the same task/PR conversation instead of a workspace-wide thread.
     external_pull_request_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     checkpoint: Mapped[list[ChatCompletionMessageParam] | None] = mapped_column(JSON, nullable=True)
     dispatch_token: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)

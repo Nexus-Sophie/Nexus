@@ -18,6 +18,7 @@ from src.server.schemas import (
     AgentInstanceResponse,
     AgentInstanceStatusUpdateRequest,
     AgentKind,
+    WorkspaceUpdateRequest,
 )
 
 router = APIRouter(prefix="/v1/agent-instances", tags=["agent-instances"])
@@ -118,5 +119,28 @@ async def set_agent_instance_status(
                     session,
                     agent_instance_id=instance.id,
                 )
+
+    return AgentInstanceResponse.from_record(instance, workspace=workspace)
+
+
+@router.patch("/{agent_instance_id}/workspace", response_model=AgentInstanceResponse)
+async def update_agent_instance_workspace(
+    request: Request,
+    agent_instance_id: uuid.UUID,
+    payload: WorkspaceUpdateRequest,
+    user: UserRecord = Depends(get_current_user),
+) -> AgentInstanceResponse:
+    database: Database = request.app.state.database
+    async with database.session() as session:
+        instance = await AgentInstanceRepository.get(session, agent_instance_id)
+        if instance is None or instance.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Agent instance not found")
+        await WorkspaceRepository.ensure_for_agent_instance(session, instance)
+        workspace = await WorkspaceRepository.set_context(
+            session,
+            agent_instance_id=instance.id,
+            github_repo=payload.github_repo,
+            project=payload.project,
+        )
 
     return AgentInstanceResponse.from_record(instance, workspace=workspace)

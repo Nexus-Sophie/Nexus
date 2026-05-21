@@ -88,8 +88,6 @@ class ProductDiscoveryPoller:
                         agent_instance_id=instance.id,
                         agent=AgentKind(instance.agent.value),
                         question="优化产品并提出一个proposal",
-                        repo=workspace.github_repo,
-                        project=workspace.project,
                         external_issue_url=None,
                     )
                 )

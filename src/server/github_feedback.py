@@ -22,6 +22,7 @@ from src.server.postgres.repositories import (
     FeatureItemRepository,
     GithubPullRequestFeedbackRepository,
     TaskRepository,
+    WorkspaceRepository,
 )
 from src.server.runner import AgentTaskRunner
 
@@ -139,8 +140,10 @@ class GithubFeedbackPoller:
         client: httpx.AsyncClient,
         task: TaskRecord,
     ) -> int:
-        # A task can only participate in this flow if it already opened a real GitHub PR.
-        if not task.repo or not task.external_pull_request_url:
+        # PR feedback resumes the original task/PR thread, so the PR URL stays task-scoped
+        # even though repo/project for newer tasks now come from workspace.
+        repo = await self._resolve_task_repo(task)
+        if not repo or not task.external_pull_request_url:
             return 0
 
         pull_request_number = _extract_pull_request_number(task.external_pull_request_url)
@@ -161,7 +164,7 @@ class GithubFeedbackPoller:
             )
             return 0
 
-        pull_request = await self._fetch_pull_request(client, token, task.repo, pull_request_number)
+        pull_request = await self._fetch_pull_request(client, token, repo, pull_request_number)
         if not pull_request:
             return 0
 
@@ -210,7 +213,7 @@ class GithubFeedbackPoller:
         feedback_items = await self._fetch_feedback_items(
             client,
             token,
-            task.repo,
+            repo,
             pull_request_number,
         )
         conflict_item = _build_pr_merge_conflict_item(pull_request, pull_request_number)
@@ -268,6 +271,20 @@ class GithubFeedbackPoller:
                 )
 
         return discovered_count
+
+    async def _resolve_task_repo(self, task: TaskRecord) -> str | None:
+        # GitHub feedback sees mixed task history:
+        # - older tasks stored repo directly on the task row
+        # - newer tasks store repo on workspace and only keep PR state on the task row
+        # Prefer workspace-era behavior, but keep old rows replayable.
+        if task.repo:
+            return task.repo
+
+        async with self._database.session() as session:
+            workspace = await WorkspaceRepository.get_by_agent_instance_id(session, task.agent_instance_id)
+        if workspace is None:
+            return None
+        return workspace.github_repo
     
     async def _resolve_viewer_login(
         self,

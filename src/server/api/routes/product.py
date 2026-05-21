@@ -177,8 +177,6 @@ async def update_proposal_status(
                     f"Summary: {proposal.summary}\n"
                     f"Answer: {proposal.answer}"
                 ),
-                repo=proposal.repo,
-                project=proposal.project,
                 external_issue_url=None,
             )
         )

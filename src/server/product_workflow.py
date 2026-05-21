@@ -56,8 +56,7 @@ class ProductWorkflowPoller:
             item = await FeatureItemRepository.get_next_unassigned(session)
             if item is None:
                 return False
-            feature = await FeatureItemRepository.get_feature(session, item.id)
-            if feature is None:
+            if await FeatureItemRepository.get_feature(session, item.id) is None:
                 logger.warning("Skip feature item %s because its feature is missing.", item.id)
                 return False
             # Feature items inherit ownership from their proposal workspace. Use the
@@ -77,19 +76,12 @@ class ProductWorkflowPoller:
             if not tela_instances:
                 logger.warning("Skip feature item task publishing because no active Tela agent instance is available.")
                 return False
-            repo = await FeatureItemRepository.get_repo(session, item.id)
-
-        if not repo:
-            logger.warning("Skip feature item %s because repo is missing.", item.id)
-            return False
 
         task_id = await self._runner.submit_task(
             TaskCreateRequest(
                 agent_instance_id=tela_instances[0].id,
                 agent=AgentKind.tela,
                 question=_build_feature_item_coding_question(item),
-                repo=repo,
-                project=feature.project,
                 external_issue_url=None,
             )
         )

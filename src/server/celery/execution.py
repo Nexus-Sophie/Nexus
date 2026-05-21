@@ -129,14 +129,12 @@ async def execute_agent_task(
             return
 
         binding = await _load_binding(database, task)
+        # Populate the in-memory task object so existing downstream helpers can keep
+        # reading task.repo/project. This keeps old helper paths working across mixed
+        # old/new task data without restoring task.repo/project as persisted state.
         task.repo = binding.github_repo
         task.project = binding.project
-        await _set_workspace_running(
-            database,
-            task.agent_instance_id,
-            binding.github_repo,
-            binding.project,
-        )
+        await _mark_workspace_running(database, task.agent_instance_id)
 
         # Worker can start only if it proves it owns the latest dispatch lease token.
         started = await _claim_running(
@@ -471,7 +469,7 @@ def _build_agent(
     agent_name = task.agent.value
     resolved_repo = task.repo or github_repo
     if agent_name in _CODING_AGENTS and not resolved_repo:
-        raise RuntimeError("Missing task repo.")
+        raise RuntimeError("Missing workspace repo.")
 
     shared = {
         "base_url": settings.base_url,
@@ -539,7 +537,7 @@ async def _load_task(database: Database, task_id: uuid.UUID) -> TaskRecord:
 
 
 async def _load_binding(database: Database, task: TaskRecord) -> _ExecutionBinding:
-    """Ensure the agent instance workspace exists and resolve the task binding."""
+    """Ensure the agent instance workspace exists and resolve execution context."""
 
     async with database.session() as session:
         instance = await AgentInstanceRepository.get(session, task.agent_instance_id)
@@ -552,15 +550,18 @@ async def _load_binding(database: Database, task: TaskRecord) -> _ExecutionBindi
                 f"task agent {task.agent.value} does not match instance agent {instance.agent.value}"
             )
 
-        github_repo = task.repo
-        project = task.project
-        if task.agent.value in _CODING_AGENTS and github_repo is None:
-            raise RuntimeError("Missing task repo.")
-
         workspace = await WorkspaceRepository.ensure_for_agent_instance(
             session,
             instance,
         )
+
+        # Workspace is the primary source of repo/project for newly created tasks.
+        # Legacy task fields remain a read-only fallback so older rows and in-flight
+        # tasks created before that shift can still execute correctly.
+        github_repo = workspace.github_repo or task.repo
+        project = workspace.project if workspace.project is not None else task.project
+        if task.agent.value in _CODING_AGENTS and github_repo is None:
+            raise RuntimeError("Missing workspace repo.")
 
     return _ExecutionBinding(
         github_repo=github_repo,
@@ -635,20 +636,15 @@ async def _extend_lease(
         )
 
 
-async def _set_workspace_running(
+async def _mark_workspace_running(
     database: Database,
     agent_instance_id: uuid.UUID,
-    github_repo: str | None,
-    project: str | None,
 ) -> None:
-    if github_repo is None and project is None:
-        raise RuntimeError("Missing task repo/project.")
+    # Worker execution may update runtime status, but repo/project remain frontend-owned.
     async with database.session() as session:
         await WorkspaceRepository.set_running(
             session,
             agent_instance_id=agent_instance_id,
-            github_repo=github_repo or "",
-            project=project
         )
 
 async def _get_latest_checkpoint(database: Database, task_id: uuid.UUID) -> list[ChatCompletionMessageParam]:

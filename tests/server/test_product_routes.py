@@ -119,8 +119,6 @@ def test_approve_proposal_dispatches_planning_task(monkeypatch) -> None:
     assert "Title: Add RAG capability" in payload.question
     assert "Summary: Improve answer quality with retrieval." in payload.question
     assert "Answer: Build RAG in small slices." in payload.question
-    assert payload.repo == "owner/repo"
-    assert payload.project == "nexus"
 
 
 def test_approve_proposal_marks_source_pm_task_merged(monkeypatch) -> None:

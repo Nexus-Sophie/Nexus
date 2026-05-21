@@ -172,8 +172,6 @@ class TaskCreateRequest(BaseModel):
     agent_instance_id: uuid.UUID
     agent: AgentKind
     question: str = Field(min_length=1)
-    repo: str | None = None
-    project: str | None = None
     external_issue_url: str | None = Field(default=None, max_length=1024)
 
     @field_validator("question")
@@ -184,9 +182,22 @@ class TaskCreateRequest(BaseModel):
             raise ValueError("question cannot be empty")
         return stripped
 
-    @field_validator("repo")
+    @field_validator("external_issue_url")
     @classmethod
-    def validate_repo(cls, value: str | None) -> str | None:
+    def validate_external_issue_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+
+class WorkspaceUpdateRequest(BaseModel):
+    github_repo: str | None = None
+    project: str | None = None
+
+    @field_validator("github_repo")
+    @classmethod
+    def validate_github_repo(cls, value: str | None) -> str | None:
         if value is None:
             return None
         stripped = value.strip()
@@ -195,14 +206,6 @@ class TaskCreateRequest(BaseModel):
     @field_validator("project")
     @classmethod
     def validate_project(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        stripped = value.strip()
-        return stripped or None
-
-    @field_validator("external_issue_url")
-    @classmethod
-    def validate_external_issue_url(cls, value: str | None) -> str | None:
         if value is None:
             return None
         stripped = value.strip()
@@ -267,15 +270,26 @@ class TaskResponse(BaseModel):
     finished_at: datetime | None
 
     @classmethod
-    def from_record(cls, task: TaskRecord) -> "TaskResponse":
+    def from_record(
+        cls,
+        task: TaskRecord,
+        *,
+        repo: str | None | object = ...,
+        project: str | None | object = ...,
+    ) -> "TaskResponse":
+        # Routes may override repo/project so one API payload can represent both:
+        # - legacy tasks that stored repo/project on the task row
+        # - newer tasks that hydrate repo/project from the workspace at read time
+        resolved_repo = task.repo if repo is ... else repo
+        resolved_project = task.project if project is ... else project
         return cls(
             id=task.id,
             agent=task.agent.value,
             agent_instance_id=task.agent_instance_id,
             category=task.category,
             question=task.question,
-            repo=task.repo,
-            project=task.project,
+            repo=resolved_repo,
+            project=resolved_project,
             external_issue_url=getattr(task, "external_issue_url", None),
             external_pull_request_url=getattr(task, "external_pull_request_url", None),
             status=task.status,

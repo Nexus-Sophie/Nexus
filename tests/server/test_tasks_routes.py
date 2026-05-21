@@ -40,6 +40,7 @@ from src.server.postgres.repositories import (
     AgentInstanceRepository,
     TaskRepository,
     TaskWorkItemRepository,
+    WorkspaceRepository,
 )
 
 
@@ -139,6 +140,7 @@ def test_list_tasks_returns_newest_first(monkeypatch: pytest.MonkeyPatch) -> Non
         return [older_task, newer_task]
 
     monkeypatch.setattr(TaskRepository, 'list', fake_list)
+    monkeypatch.setattr(WorkspaceRepository, 'list_for_user', AsyncMock(return_value=[]))
 
     async def run_request() -> httpx.Response:
         transport = httpx.ASGITransport(app=_build_app())
@@ -242,6 +244,7 @@ def test_list_tasks_passes_filters_to_repository(monkeypatch: pytest.MonkeyPatch
         return [expected_task]
 
     monkeypatch.setattr(TaskRepository, 'list', fake_list)
+    monkeypatch.setattr(WorkspaceRepository, 'list_for_user', AsyncMock(return_value=[]))
 
     async def run_request() -> httpx.Response:
         transport = httpx.ASGITransport(app=app)
@@ -520,6 +523,7 @@ def test_consult_task_returns_process_reply(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(TaskRepository, 'get', fake_get)
     monkeypatch.setattr(tasks_routes, 'get_settings', _make_settings)
     monkeypatch.setattr(AgentInstanceRepository, 'get', _fake_get_current_user_instance)
+    monkeypatch.setattr(WorkspaceRepository, 'get_by_agent_instance_id', AsyncMock(return_value=None))
     monkeypatch.setattr(tasks_routes.Sophie, 'create', fake_create)
 
     async def run_request() -> httpx.Response:

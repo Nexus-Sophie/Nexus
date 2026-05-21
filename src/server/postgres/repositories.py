@@ -224,7 +224,12 @@ class WorkspaceRepository:
         session: AsyncSession,
         agent_instance: AgentInstanceRecord,
     ) -> WorkspaceRecord:
-        """Ensure agent instance has a separate workspace."""
+        """Ensure an agent instance has a durable workspace record.
+
+        The workspace stores frontend-owned repo/project context plus worker-owned
+        runtime status. Task execution may flip status, but repo/project should be
+        updated explicitly by the frontend workflow instead of inferred from tasks.
+        """
         workspace = await WorkspaceRepository.get_by_agent_instance_id(session, agent_instance.id)
         if workspace is None:
             workspace = WorkspaceRecord(
@@ -244,16 +249,33 @@ class WorkspaceRepository:
         session: AsyncSession,
         *,
         agent_instance_id: uuid.UUID,
-        github_repo: str,
-        project: str | None,
     ) -> WorkspaceRecord | None:
-        return await WorkspaceRepository._set_state(
+        return await WorkspaceRepository._set_status(
             session,
             agent_instance_id=agent_instance_id,
             status=WorkspaceStatus.running,
-            github_repo=github_repo,
-            project=project,
         )
+
+    @staticmethod
+    async def set_context(
+        session: AsyncSession,
+        *,
+        agent_instance_id: uuid.UUID,
+        github_repo: str | None,
+        project: str | None,
+    ) -> WorkspaceRecord | None:
+        workspace = await WorkspaceRepository.get_by_agent_instance_id(session, agent_instance_id)
+        if workspace is None:
+            return None
+
+        now = utc_now()
+        workspace.github_repo = github_repo
+        workspace.project = project
+        workspace.last_used_at = now
+        workspace.updated_at = now
+        await session.commit()
+        await session.refresh(workspace)
+        return workspace
 
     @staticmethod
     async def set_idle(
@@ -297,30 +319,6 @@ class WorkspaceRepository:
         await session.commit()
         await session.refresh(workspace)
         return workspace
-
-    @staticmethod
-    async def _set_state(
-        session: AsyncSession,
-        *,
-        agent_instance_id: uuid.UUID,
-        status: WorkspaceStatus,
-        github_repo: str | None,
-        project: str | None,
-    ) -> WorkspaceRecord | None:
-        workspace = await WorkspaceRepository.get_by_agent_instance_id(session, agent_instance_id)
-        if workspace is None:
-            return None
-
-        now = utc_now()
-        workspace.status = status
-        workspace.github_repo = github_repo
-        workspace.project = project
-        workspace.last_used_at = now
-        workspace.updated_at = now
-        await session.commit()
-        await session.refresh(workspace)
-        return workspace
-
 
 class ProductProposalRepository:
     @staticmethod
@@ -739,10 +737,12 @@ class TaskRepository:
             query = query.where(TaskRecord.status == status)
         if category is not None:
             query = query.where(TaskRecord.category == category)
-        if repo is not None:
-            query = query.where(TaskRecord.repo == repo)
-        if project is not None:
-            query = query.where(TaskRecord.project == project)
+        if repo is not None or project is not None:
+            query = query.join(WorkspaceRecord, WorkspaceRecord.agent_instance_id == TaskRecord.agent_instance_id)
+            if repo is not None:
+                query = query.where(WorkspaceRecord.github_repo == repo)
+            if project is not None:
+                query = query.where(WorkspaceRecord.project == project)
 
         query = query.order_by(TaskRecord.created_at.desc()).limit(limit)
         result = await session.execute(query)

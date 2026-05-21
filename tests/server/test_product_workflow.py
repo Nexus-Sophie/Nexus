@@ -59,10 +59,6 @@ def test_poll_once_publishes_one_feature_item_to_tela(monkeypatch):
         captured["proposal_item_id"] = item_id
         return proposal
 
-    async def fake_get_repo(session, item_id):
-        captured["repo_item_id"] = item_id
-        return "owner/repo"
-
     async def fake_assign(session, item_id, *, task_id):
         captured["assign"] = (item_id, task_id)
         return item
@@ -71,7 +67,6 @@ def test_poll_once_publishes_one_feature_item_to_tela(monkeypatch):
     monkeypatch.setattr(AgentInstanceRepository, "list_by_active_task_load", fake_list_agents)
     monkeypatch.setattr(FeatureItemRepository, "get_feature", fake_get_feature)
     monkeypatch.setattr(FeatureItemRepository, "get_proposal", fake_get_proposal)
-    monkeypatch.setattr(FeatureItemRepository, "get_repo", fake_get_repo)
     monkeypatch.setattr(FeatureItemRepository, "assign_task", fake_assign)
 
     poller = ProductWorkflowPoller(
@@ -89,12 +84,9 @@ def test_poll_once_publishes_one_feature_item_to_tela(monkeypatch):
     assert captured["limit"] == 1
     assert captured["feature_item_id"] == "feature-item-id"
     assert captured["proposal_item_id"] == "feature-item-id"
-    assert captured["repo_item_id"] == "feature-item-id"
     payload = runner.submit_task.await_args.args[0]
     assert payload.agent_instance_id == tela_instance_id
     assert payload.agent.value == "tela"
-    assert payload.repo == "owner/repo"
-    assert payload.project == "nexus"
     assert "Knowledge base" in payload.question
     assert captured["assign"] == ("feature-item-id", "coding-task-id")
 

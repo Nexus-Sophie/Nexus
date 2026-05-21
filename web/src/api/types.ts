@@ -16,8 +16,6 @@ export interface ApiTaskCreateRequest {
   agent_instance_id: string;
   agent: ApiAgentKind;
   question: string;
-  repo?: string | null;
-  project?: string | null;
   external_issue_url?: string | null;
 }
 
@@ -152,6 +150,11 @@ export interface ApiAgentInstanceCreateRequest {
 
 export interface ApiAgentInstanceStatusUpdateRequest {
   is_active: boolean;
+}
+
+export interface ApiWorkspaceUpdateRequest {
+  github_repo?: string | null;
+  project?: string | null;
 }
 
 export interface ApiAgentInstance {

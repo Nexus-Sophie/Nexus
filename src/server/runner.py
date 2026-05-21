@@ -51,8 +51,10 @@ class AgentTaskRunner:
                 )
 
             category = _task_category_for_agent(AgentName(request.agent.value))
-            if category == TaskCategory.coding and not request.repo:
-                raise ValueError("repo is required for coding agents")
+            workspace = await WorkspaceRepository.ensure_for_agent_instance(session, instance)
+            # Workspace is now the canonical repo/project binding for an agent instance.
+            if category == TaskCategory.coding and not workspace.github_repo:
+                raise ValueError("workspace repo is required for coding agents")
 
             task = await TaskRepository.create(
                 session,
@@ -60,12 +62,12 @@ class AgentTaskRunner:
                 agent_instance_id=request.agent_instance_id,
                 category=category,
                 question=request.question,
-                repo=request.repo,
-                project=request.project,
+                # New tasks no longer duplicate repo/project. Execution resolves them
+                # from the agent instance workspace at run time.
+                repo=None,
+                project=None,
                 external_issue_url=request.external_issue_url,
             )
-
-            workspace = await WorkspaceRepository.ensure_for_agent_instance(session, instance)
             logger.info(f"Agent `{instance.agent.name}` has workspace `{workspace.workspace_key}`")
         logger.info(f"Task `{task.id}` is queued.")
 
@@ -102,6 +104,7 @@ class AgentTaskRunner:
         for task in recoverable_tasks:
             async with self._database.session() as session:
                 instance = await AgentInstanceRepository.get(session, task.agent_instance_id)
+                workspace = await WorkspaceRepository.get_by_agent_instance_id(session, task.agent_instance_id)
 
             if instance is None or not instance.is_active:
                 logger.warning(
@@ -125,14 +128,17 @@ class AgentTaskRunner:
                 if reset is None:
                     continue
 
-            if task.category == TaskCategory.coding and not task.repo:
+            # Recovery still needs to survive mixed historical data. New tasks read repo
+            # from workspace, but older persisted rows may only have task.repo.
+            resolved_repo = (workspace.github_repo if workspace is not None else None) or task.repo
+            if task.category == TaskCategory.coding and not resolved_repo:
                 async with self._database.session() as session:
                     await TaskRepository.set_failed(
                         session,
                         task.id,
-                        error="Recovery failed: task repo is missing.",
+                        error="Recovery failed: workspace repo is missing.",
                     )
-                logger.warning("Failed to recover task %s because repo is missing.", task.id)
+                logger.warning("Failed to recover task %s because workspace repo is missing.", task.id)
                 continue
 
             try:

@@ -21,6 +21,7 @@ from src.server.postgres.repositories import (
     AgentInstanceRepository,
     TaskRepository,
     TaskWorkItemRepository,
+    WorkspaceRepository,
 )
 from src.server.runner import AgentTaskRunner
 from src.server.schemas import (
@@ -38,6 +39,17 @@ available_agent_factory = {
     "tela": Tela,
     "sophie": Sophie,
 }
+
+
+def _resolved_task_repo_project(task, workspace) -> tuple[str | None, str | None]:
+    # Mixed datasets still exist here:
+    # - older task rows persisted repo/project directly on TaskRecord
+    # - newer task rows read repo/project from the agent-instance workspace
+    # Prefer the explicit task value when present so old rows render as-is, then
+    # fall back to the current workspace context for newer rows.
+    repo = task.repo or (workspace.github_repo if workspace is not None else None)
+    project = task.project if task.project is not None else (workspace.project if workspace is not None else None)
+    return repo, project
 
 
 @router.post("", response_model=TaskSubmitResponse, status_code=202)
@@ -94,8 +106,20 @@ async def list_tasks(
             user_id=user.id,
             limit=limit,
         )
+        workspace_by_agent_instance_id = {
+            workspace.agent_instance_id: workspace
+            for workspace in await WorkspaceRepository.list_for_user(session, user_id=user.id)
+        }
     tasks = sorted(tasks, key=lambda task: task.created_at, reverse=True)
-    return [TaskResponse.from_record(task) for task in tasks]
+    responses: list[TaskResponse] = []
+    for task in tasks:
+        # Preserve one response shape across old task rows and new workspace-backed rows.
+        resolved_repo, resolved_project = _resolved_task_repo_project(
+            task,
+            workspace_by_agent_instance_id.get(task.agent_instance_id),
+        )
+        responses.append(TaskResponse.from_record(task, repo=resolved_repo, project=resolved_project))
+    return responses
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
@@ -110,9 +134,11 @@ async def get_task(
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
         instance = await AgentInstanceRepository.get(session, task.agent_instance_id)
+        workspace = await WorkspaceRepository.get_by_agent_instance_id(session, task.agent_instance_id)
     if instance is None or instance.user_id != user.id:
         raise HTTPException(status_code=404, detail="Task not found")
-    return TaskResponse.from_record(task)
+    repo, project = _resolved_task_repo_project(task, workspace)
+    return TaskResponse.from_record(task, repo=repo, project=project)
 
 
 @router.get("/{task_id}/work-items", response_model=list[TaskWorkItemResponse])
@@ -200,6 +226,7 @@ async def consult_task(
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
         instance = await AgentInstanceRepository.get(session, task.agent_instance_id)
+        workspace = await WorkspaceRepository.get_by_agent_instance_id(session, task.agent_instance_id)
     if instance is None or instance.user_id != user.id:
         raise HTTPException(status_code=404, detail="Task not found")
     if task.agent.value not in available_agent_factory.keys():
@@ -208,7 +235,8 @@ async def consult_task(
     settings = get_settings()
     if not settings.api_key:
         raise HTTPException(status_code=503, detail="NEXUS_API_KEY is not configured")
-    if not task.repo:
+    repo, _ = _resolved_task_repo_project(task, workspace)
+    if not repo:
         raise HTTPException(status_code=409, detail="Task repo is required for consult")
 
     github_token = settings.github_tokens.get(task.agent.value)
@@ -218,7 +246,7 @@ async def consult_task(
         api_key=settings.api_key,
         model=settings.model,
         max_context=settings.max_context,
-        github_repo=task.repo,
+        github_repo=repo,
         max_attempts=settings.max_attempts,
         github_token=github_token,
     )
