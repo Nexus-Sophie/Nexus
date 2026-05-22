@@ -48,6 +48,14 @@ _REQUIRED_SCHEMA: dict[str, set[str]] = {
         "status",
         "source_task_id",
     },
+    "proposal_planning_run": {
+        "id",
+        "proposal_id",
+        "task_id",
+        "attempt",
+        "status",
+        "error",
+    },
     "feature": {
         "id",
         "proposal_id",
@@ -184,12 +192,20 @@ class Database:
                 text(
                     "UPDATE product_proposal p "
                     "SET status = CASE "
-                    "WHEN EXISTS (SELECT 1 FROM feature f WHERE f.proposal_id = p.id) "
+                    "WHEN EXISTS ("
+                    "SELECT 1 FROM feature_item fi "
+                    "JOIN feature f ON fi.feature_id = f.id "
+                    "WHERE f.proposal_id = p.id"
+                    ") "
                     "AND NOT EXISTS ("
                     "SELECT 1 FROM feature f "
                     "WHERE f.proposal_id = p.id AND f.status NOT IN ('completed', 'closed')"
                     ") THEN 'completed' "
-                    "WHEN EXISTS (SELECT 1 FROM feature f WHERE f.proposal_id = p.id) THEN 'planned' "
+                    "WHEN EXISTS ("
+                    "SELECT 1 FROM feature_item fi "
+                    "JOIN feature f ON fi.feature_id = f.id "
+                    "WHERE f.proposal_id = p.id"
+                    ") THEN 'planned' "
                     "ELSE p.status "
                     "END "
                     "WHERE p.status <> 'rejected'"

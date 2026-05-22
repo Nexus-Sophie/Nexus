@@ -74,12 +74,15 @@ class FakeFeatureItemSyncSession:
     async def execute(self, query):
         del query
         self.execute_call_count += 1
-        statuses = (
-            self.item_statuses
-            if self.execute_call_count == 1
-            else [self.feature.status, *self.sibling_feature_statuses]
-        )
-        return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: list(statuses)))
+        if self.execute_call_count == 1:
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: list(self.item_statuses)))
+        if self.execute_call_count == 2:
+            rows = [
+                (self.feature.id, self.feature.status),
+                *[(uuid.uuid4(), status) for status in self.sibling_feature_statuses],
+            ]
+            return SimpleNamespace(all=lambda: rows)
+        return SimpleNamespace(scalar_one=lambda: len(self.item_statuses))
 
 
 def _proposal(**overrides):

@@ -22,6 +22,8 @@ from src.server.postgres.models import (
     FeatureStatus,
     ProductProposalRecord,
     ProductProposalStatus,
+    ProposalPlanningRunRecord,
+    ProposalPlanningRunStatus,
     TaskCategory,
     GithubPullRequestFeedbackKind,
     GithubPullRequestFeedbackRecord,
@@ -412,21 +414,203 @@ class ProductProposalRepository:
             return proposal
 
         result = await session.execute(
-            select(FeatureRecord.status).where(FeatureRecord.proposal_id == proposal_id)
+            select(FeatureRecord.id, FeatureRecord.status).where(FeatureRecord.proposal_id == proposal_id)
         )
-        feature_statuses = list(result.scalars().all())
-        if not feature_statuses:
+        feature_rows = list(result.all())
+        if not feature_rows:
             return proposal
 
+        feature_ids = [row[0] for row in feature_rows]
+        item_result = await session.execute(
+            select(func.count(FeatureItemRecord.id)).where(FeatureItemRecord.feature_id.in_(feature_ids))
+        )
+        item_count = int(item_result.scalar_one())
+        feature_statuses = [row[1] for row in feature_rows]
+        # `planned` means the proposal has a usable implementation plan, not merely
+        # feature shells. Until at least one feature item exists, keep the proposal
+        # at `approved` and let the planning run status explain the in-flight state.
         next_status = (
             ProductProposalStatus.completed
-            if all(status in {FeatureStatus.completed, FeatureStatus.closed} for status in feature_statuses)
+            if item_count > 0 and all(status in {FeatureStatus.completed, FeatureStatus.closed} for status in feature_statuses)
             else ProductProposalStatus.planned
+            if item_count > 0
+            else ProductProposalStatus.approved
         )
         if proposal.status != next_status:
             proposal.status = next_status
             proposal.updated_at = utc_now()
         return proposal
+
+
+class ProposalPlanningRunRepository:
+    @staticmethod
+    async def create_pending(
+        session: AsyncSession,
+        *,
+        proposal_id: uuid.UUID,
+        task_id: uuid.UUID,
+    ) -> ProposalPlanningRunRecord:
+        result = await session.execute(
+            select(func.coalesce(func.max(ProposalPlanningRunRecord.attempt), 0)).where(
+                ProposalPlanningRunRecord.proposal_id == proposal_id
+            )
+        )
+        next_attempt = int(result.scalar_one()) + 1
+        run = ProposalPlanningRunRecord(
+            proposal_id=proposal_id,
+            task_id=task_id,
+            attempt=next_attempt,
+            status=ProposalPlanningRunStatus.queued,
+        )
+        session.add(run)
+        await session.flush()
+        return run
+
+    @staticmethod
+    async def get_by_task_id(
+        session: AsyncSession,
+        task_id: uuid.UUID,
+    ) -> ProposalPlanningRunRecord | None:
+        query = select(ProposalPlanningRunRecord).where(ProposalPlanningRunRecord.task_id == task_id)
+        result = await session.execute(query)
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_latest_by_proposal(
+        session: AsyncSession,
+        proposal_id: uuid.UUID,
+    ) -> ProposalPlanningRunRecord | None:
+        query = (
+            select(ProposalPlanningRunRecord)
+            .where(ProposalPlanningRunRecord.proposal_id == proposal_id)
+            .order_by(ProposalPlanningRunRecord.attempt.desc(), ProposalPlanningRunRecord.created_at.desc())
+            .limit(1)
+        )
+        result = await session.execute(query)
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_latest_by_proposal_ids(
+        session: AsyncSession,
+        proposal_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, ProposalPlanningRunRecord]:
+        if not proposal_ids:
+            return {}
+        query = (
+            select(ProposalPlanningRunRecord)
+            .where(ProposalPlanningRunRecord.proposal_id.in_(proposal_ids))
+            .order_by(
+                ProposalPlanningRunRecord.proposal_id.asc(),
+                ProposalPlanningRunRecord.attempt.desc(),
+                ProposalPlanningRunRecord.created_at.desc(),
+            )
+        )
+        result = await session.execute(query)
+        latest_by_proposal_id: dict[uuid.UUID, ProposalPlanningRunRecord] = {}
+        for run in result.scalars().all():
+            latest_by_proposal_id.setdefault(run.proposal_id, run)
+        return latest_by_proposal_id
+
+    @staticmethod
+    async def validate_plan(
+        session: AsyncSession,
+        proposal_id: uuid.UUID,
+    ) -> str | None:
+        """Validate whether a proposal has a usable generated plan.
+
+        A planning run is only considered successful when it creates at least one
+        feature and every created feature has at least one feature item. This is
+        the minimum structure required for downstream product workflow to publish
+        executable coding tasks.
+
+        Args:
+            session: Active database session used to inspect generated features and
+                feature items.
+            proposal_id: Identifier of the approved proposal whose generated plan
+                should be checked.
+
+        Returns:
+            None if the generated plan is structurally valid. Otherwise returns a
+            human-readable validation error describing why the plan is incomplete.
+        """
+        feature_result = await session.execute(
+            select(FeatureRecord.id).where(FeatureRecord.proposal_id == proposal_id).order_by(FeatureRecord.created_at.asc())
+        )
+        feature_ids = list(feature_result.scalars().all())
+        if not feature_ids:
+            return "Planning task completed without creating any features."
+
+        # Planning is considered successful only when every created feature has
+        # at least one executable feature item. Otherwise the proposal would still
+        # be reviewable in UI but unusable for downstream coding task publishing.
+        rows = await session.execute(
+            select(FeatureRecord.id, func.count(FeatureItemRecord.id))
+            .outerjoin(FeatureItemRecord, FeatureItemRecord.feature_id == FeatureRecord.id)
+            .where(FeatureRecord.proposal_id == proposal_id)
+            .group_by(FeatureRecord.id)
+        )
+        empty_feature_count = sum(1 for _, item_count in rows.all() if int(item_count) == 0)
+        if empty_feature_count > 0:
+            return f"Planning task completed with {empty_feature_count} feature(s) missing feature items."
+        return None
+
+    @staticmethod
+    async def set_running(
+        session: AsyncSession,
+        run_id: uuid.UUID,
+    ) -> ProposalPlanningRunRecord | None:
+        run = await session.get(ProposalPlanningRunRecord, run_id)
+        if run is None:
+            return None
+
+        now = utc_now()
+        run.status = ProposalPlanningRunStatus.running
+        run.error = None
+        run.started_at = run.started_at or now
+        run.finished_at = None
+        run.updated_at = now
+        await session.commit()
+        await session.refresh(run)
+        return run
+
+    @staticmethod
+    async def set_failed(
+        session: AsyncSession,
+        run_id: uuid.UUID,
+        *,
+        error: str,
+    ) -> ProposalPlanningRunRecord | None:
+        run = await session.get(ProposalPlanningRunRecord, run_id)
+        if run is None:
+            return None
+
+        now = utc_now()
+        run.status = ProposalPlanningRunStatus.failed
+        run.error = error
+        run.finished_at = now
+        run.updated_at = now
+        await session.commit()
+        await session.refresh(run)
+        return run
+
+    @staticmethod
+    async def set_completed(
+        session: AsyncSession,
+        run_id: uuid.UUID,
+    ) -> ProposalPlanningRunRecord | None:
+        run = await session.get(ProposalPlanningRunRecord, run_id)
+        if run is None:
+            return None
+
+        now = utc_now()
+        run.status = ProposalPlanningRunStatus.completed
+        run.error = None
+        run.started_at = run.started_at or now
+        run.finished_at = now
+        run.updated_at = now
+        await session.commit()
+        await session.refresh(run)
+        return run
 
 
 class FeatureRepository:
@@ -448,11 +632,6 @@ class FeatureRepository:
         )
         session.add(feature)
         await session.flush()
-        if proposal_id is not None:
-            proposal = await session.get(ProductProposalRecord, proposal_id)
-            if proposal is not None:
-                proposal.status = ProductProposalStatus.planned
-                proposal.updated_at = utc_now()
         await session.commit()
         await session.refresh(feature)
         return feature
@@ -683,7 +862,7 @@ class FeatureItemRepository:
 
 class TaskRepository:
     @staticmethod
-    async def create(
+    async def create_pending(
         session: AsyncSession,
         *,
         agent: AgentName,
@@ -705,6 +884,31 @@ class TaskRepository:
             status=TaskStatus.queued,
         )
         session.add(task)
+        await session.flush()
+        return task
+
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        *,
+        agent: AgentName,
+        agent_instance_id: uuid.UUID,
+        category: TaskCategory,
+        question: str,
+        repo: str | None,
+        project: str | None,
+        external_issue_url: str | None,
+    ) -> TaskRecord:
+        task = await TaskRepository.create_pending(
+            session,
+            agent=agent,
+            agent_instance_id=agent_instance_id,
+            category=category,
+            question=question,
+            repo=repo,
+            project=project,
+            external_issue_url=external_issue_url,
+        )
         await session.commit()
         await session.refresh(task)
         return task

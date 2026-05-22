@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 from src.agents.base.agent import BaseAgentResponse
 from src.server.celery import execution
 from src.server.postgres.models import GithubPullRequestFeedbackKind, TaskCategory, TaskStatus, TaskWorkItemStatus
-from src.server.postgres.repositories import TaskWorkItemRepository
+from src.server.postgres.repositories import ProductProposalRepository, ProposalPlanningRunRepository, TaskRepository, TaskWorkItemRepository
 
 
 class FakeAgent:
@@ -106,11 +106,14 @@ def test_run_agent_passes_question_as_checkpoint_resume_question(monkeypatch):
 
 
 class FakeDatabase:
+    def __init__(self) -> None:
+        self._session = SimpleNamespace(commit=AsyncMock())
+
     def session(self):
         return self
 
     async def __aenter__(self):
-        return object()
+        return self._session
 
     async def __aexit__(self, *args):
         return None
@@ -630,4 +633,82 @@ def test_release_workspace_keeps_binding_for_inactive_instance(monkeypatch):
 
     assert captured == {
         "agent_instance_id": "agent-id",
+    }
+
+
+def test_mark_waiting_for_review_completes_planning_run_when_plan_is_valid(monkeypatch):
+    captured = {}
+    planning_run = SimpleNamespace(id="planning-run-id", proposal_id="proposal-id")
+
+    async def fake_set_waiting_for_review(session, task_id, *, result):
+        captured["waiting"] = (task_id, result)
+
+    async def fake_get_by_task_id(session, task_id):
+        return planning_run
+
+    async def fake_validate_plan(session, proposal_id):
+        captured["validated_proposal_id"] = proposal_id
+        return None
+
+    async def fake_set_completed(session, run_id):
+        captured["completed_run_id"] = run_id
+
+    async def fake_sync_status_from_features(session, proposal_id):
+        captured["synced_proposal_id"] = proposal_id
+
+    monkeypatch.setattr(TaskRepository, "set_waiting_for_review", fake_set_waiting_for_review)
+    monkeypatch.setattr(ProposalPlanningRunRepository, "get_by_task_id", fake_get_by_task_id)
+    monkeypatch.setattr(ProposalPlanningRunRepository, "validate_plan", fake_validate_plan)
+    monkeypatch.setattr(ProposalPlanningRunRepository, "set_completed", fake_set_completed)
+    monkeypatch.setattr(ProductProposalRepository, "sync_status_from_features", fake_sync_status_from_features)
+
+    asyncio.run(execution._mark_waiting_for_review(FakeDatabase(), "task-id", "pm result"))
+
+    assert captured == {
+        "waiting": ("task-id", "pm result"),
+        "validated_proposal_id": "proposal-id",
+        "completed_run_id": "planning-run-id",
+        "synced_proposal_id": "proposal-id",
+    }
+
+
+def test_mark_waiting_for_review_fails_planning_run_when_plan_is_invalid(monkeypatch):
+    captured = {}
+    planning_run = SimpleNamespace(id="planning-run-id", proposal_id="proposal-id")
+
+    async def fake_set_waiting_for_review(session, task_id, *, result):
+        captured["waiting"] = (task_id, result)
+
+    async def fake_get_by_task_id(session, task_id):
+        return planning_run
+
+    async def fake_validate_plan(session, proposal_id):
+        return "missing feature items"
+
+    async def fake_set_failed(session, task_id, *, error):
+        captured["task_failed"] = (task_id, error)
+
+    async def fake_set_run_failed(session, run_id, *, error):
+        captured["run_failed"] = (run_id, error)
+
+    async def fail_set_completed(session, run_id):
+        raise AssertionError("completed hook should not run for an invalid plan")
+
+    async def fail_sync_status(session, proposal_id):
+        raise AssertionError("proposal status sync should not run for an invalid plan")
+
+    monkeypatch.setattr(TaskRepository, "set_waiting_for_review", fake_set_waiting_for_review)
+    monkeypatch.setattr(ProposalPlanningRunRepository, "get_by_task_id", fake_get_by_task_id)
+    monkeypatch.setattr(ProposalPlanningRunRepository, "validate_plan", fake_validate_plan)
+    monkeypatch.setattr(TaskRepository, "set_failed", fake_set_failed)
+    monkeypatch.setattr(ProposalPlanningRunRepository, "set_failed", fake_set_run_failed)
+    monkeypatch.setattr(ProposalPlanningRunRepository, "set_completed", fail_set_completed)
+    monkeypatch.setattr(ProductProposalRepository, "sync_status_from_features", fail_sync_status)
+
+    asyncio.run(execution._mark_waiting_for_review(FakeDatabase(), "task-id", "pm result"))
+
+    assert captured == {
+        "waiting": ("task-id", "pm result"),
+        "task_failed": ("task-id", "missing feature items"),
+        "run_failed": ("planning-run-id", "missing feature items"),
     }

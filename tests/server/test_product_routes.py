@@ -14,12 +14,18 @@ from fastapi import FastAPI
 from src.server.api.dependencies import get_current_user
 from src.server.api.routes.product import router as product_router
 from src.server.postgres.models import AgentName, ProductProposalStatus
-from src.server.postgres.repositories import AgentInstanceRepository, ProductProposalRepository, TaskRepository, WorkspaceRepository
+from src.server.postgres.repositories import (
+    AgentInstanceRepository,
+    ProductProposalRepository,
+    ProposalPlanningRunRepository,
+    TaskRepository,
+    WorkspaceRepository,
+)
 
 
 class FakeDatabase:
     def __init__(self, session_obj: object | None = None) -> None:
-        self._session_obj = session_obj if session_obj is not None else object()
+        self._session_obj = session_obj if session_obj is not None else SimpleNamespace(commit=AsyncMock())
 
     @asynccontextmanager
     async def session(self):
@@ -58,6 +64,24 @@ def _proposal(**overrides: Any) -> Any:
     return SimpleNamespace(**values)
 
 
+def _planning_run(**overrides: Any) -> Any:
+    now = datetime.now(timezone.utc)
+    values = {
+        "id": uuid.uuid4(),
+        "proposal_id": uuid.uuid4(),
+        "task_id": uuid.uuid4(),
+        "attempt": 1,
+        "status": "queued",
+        "error": None,
+        "created_at": now,
+        "updated_at": now,
+        "started_at": None,
+        "finished_at": None,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
 async def _fake_user_workspaces(session, *, user_id):
     return [SimpleNamespace(github_repo="owner/repo", project="nexus")]
 
@@ -66,12 +90,25 @@ def test_approve_proposal_dispatches_planning_task(monkeypatch) -> None:
     proposal_id = uuid.uuid4()
     user_id = uuid.uuid4()
     marc_instance_id = uuid.uuid4()
+    planning_task_id = uuid.uuid4()
     approved = _proposal(id=proposal_id, user_id=user_id, status=ProductProposalStatus.approved)
+    latest_run = _planning_run(
+        proposal_id=proposal_id,
+        task_id=planning_task_id,
+        status="queued",
+    )
     captured = {}
-    runner = SimpleNamespace(submit_task=AsyncMock(return_value=uuid.uuid4()))
+    runner = SimpleNamespace(
+        create_task_record=AsyncMock(return_value=SimpleNamespace(id=planning_task_id)),
+        dispatch_existing_task=AsyncMock(return_value=True),
+    )
+    state = {"get_calls": 0}
 
     async def fake_get(session, pid):
-        return _proposal(id=pid, user_id=user_id, status=ProductProposalStatus.proposed)
+        state["get_calls"] += 1
+        if state["get_calls"] == 1:
+            return _proposal(id=pid, user_id=user_id, status=ProductProposalStatus.proposed)
+        return approved
 
     async def fake_set_status(session, pid, status):
         captured["proposal_id"] = pid
@@ -86,9 +123,19 @@ def test_approve_proposal_dispatches_planning_task(monkeypatch) -> None:
         captured["limit"] = limit
         return [SimpleNamespace(id=marc_instance_id)]
 
+    async def fake_create_pending(session, *, proposal_id, task_id):
+        captured["planning_run_proposal_id"] = proposal_id
+        captured["planning_run_task_id"] = task_id
+        return latest_run
+
+    async def fake_get_latest_by_proposal(session, proposal_id):
+        return latest_run
+
     monkeypatch.setattr(ProductProposalRepository, "get", fake_get)
     monkeypatch.setattr(ProductProposalRepository, "set_status", fake_set_status)
     monkeypatch.setattr(AgentInstanceRepository, "list_by_active_task_load", fake_list_marc)
+    monkeypatch.setattr(ProposalPlanningRunRepository, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ProposalPlanningRunRepository, "get_latest_by_proposal", fake_get_latest_by_proposal)
     monkeypatch.setattr(WorkspaceRepository, "list_for_user", _fake_user_workspaces)
 
     async def run_request() -> httpx.Response:
@@ -111,20 +158,25 @@ def test_approve_proposal_dispatches_planning_task(monkeypatch) -> None:
         "github_repo": "owner/repo",
         "project": "nexus",
         "limit": 1,
+        "planning_run_proposal_id": proposal_id,
+        "planning_run_task_id": planning_task_id,
     }
-    payload = runner.submit_task.await_args.args[0]
+    payload = runner.create_task_record.await_args.args[0]
     assert payload.agent_instance_id == marc_instance_id
     assert payload.agent.value == "marc"
     assert f"Proposal ID: {proposal_id}" in payload.question
     assert "Title: Add RAG capability" in payload.question
     assert "Summary: Improve answer quality with retrieval." in payload.question
     assert "Answer: Build RAG in small slices." in payload.question
+    runner.dispatch_existing_task.assert_awaited_once_with(planning_task_id, recovered=False, mark_failed=True)
+    assert response.json()["latest_planning_run"]["task_id"] == str(planning_task_id)
 
 
 def test_approve_proposal_marks_source_pm_task_merged(monkeypatch) -> None:
     proposal_id = uuid.uuid4()
     user_id = uuid.uuid4()
     source_task_id = uuid.uuid4()
+    planning_task_id = uuid.uuid4()
     approved = _proposal(
         id=proposal_id,
         user_id=user_id,
@@ -132,10 +184,17 @@ def test_approve_proposal_marks_source_pm_task_merged(monkeypatch) -> None:
         source_task_id=source_task_id,
     )
     captured = {}
-    runner = SimpleNamespace(submit_task=AsyncMock(return_value=uuid.uuid4()))
+    runner = SimpleNamespace(
+        create_task_record=AsyncMock(return_value=SimpleNamespace(id=planning_task_id)),
+        dispatch_existing_task=AsyncMock(return_value=True),
+    )
+    state = {"get_calls": 0}
 
     async def fake_get(session, pid):
-        return _proposal(id=pid, user_id=user_id, status=ProductProposalStatus.proposed)
+        state["get_calls"] += 1
+        if state["get_calls"] == 1:
+            return _proposal(id=pid, user_id=user_id, status=ProductProposalStatus.proposed)
+        return approved
 
     async def fake_set_status(session, pid, status):
         return approved
@@ -147,10 +206,18 @@ def test_approve_proposal_marks_source_pm_task_merged(monkeypatch) -> None:
     async def fake_list_marc(session, *, agent, user_id=None, github_repo=None, project=None, limit):
         return [SimpleNamespace(id=uuid.uuid4())]
 
+    async def fake_create_pending(session, *, proposal_id, task_id):
+        return _planning_run(proposal_id=proposal_id, task_id=task_id)
+
+    async def fake_get_latest_by_proposal(session, proposal_id):
+        return _planning_run(proposal_id=proposal_id, task_id=planning_task_id)
+
     monkeypatch.setattr(ProductProposalRepository, "get", fake_get)
     monkeypatch.setattr(ProductProposalRepository, "set_status", fake_set_status)
     monkeypatch.setattr(TaskRepository, "set_merged", fake_set_merged)
     monkeypatch.setattr(AgentInstanceRepository, "list_by_active_task_load", fake_list_marc)
+    monkeypatch.setattr(ProposalPlanningRunRepository, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ProposalPlanningRunRepository, "get_latest_by_proposal", fake_get_latest_by_proposal)
     monkeypatch.setattr(WorkspaceRepository, "list_for_user", _fake_user_workspaces)
 
     async def run_request() -> httpx.Response:
@@ -178,7 +245,7 @@ def test_reject_proposal_marks_source_pm_task_closed(monkeypatch) -> None:
         source_task_id=source_task_id,
     )
     captured = {}
-    runner = SimpleNamespace(submit_task=AsyncMock(return_value=uuid.uuid4()))
+    runner = SimpleNamespace()
 
     async def fake_get(session, pid):
         return _proposal(id=pid, user_id=user_id, status=ProductProposalStatus.proposed)
@@ -190,9 +257,13 @@ def test_reject_proposal_marks_source_pm_task_closed(monkeypatch) -> None:
         captured["closed_task_id"] = task_id
         return SimpleNamespace(id=task_id)
 
+    async def fake_get_latest_by_proposal(session, proposal_id):
+        return None
+
     monkeypatch.setattr(ProductProposalRepository, "get", fake_get)
     monkeypatch.setattr(ProductProposalRepository, "set_status", fake_set_status)
     monkeypatch.setattr(TaskRepository, "set_closed", fake_set_closed)
+    monkeypatch.setattr(ProposalPlanningRunRepository, "get_latest_by_proposal", fake_get_latest_by_proposal)
     monkeypatch.setattr(WorkspaceRepository, "list_for_user", _fake_user_workspaces)
 
     async def run_request() -> httpx.Response:
@@ -218,6 +289,7 @@ def test_list_proposals_filters_current_user(monkeypatch) -> None:
         return [_proposal(user_id=user_id)]
 
     monkeypatch.setattr(ProductProposalRepository, "list", fake_list)
+    monkeypatch.setattr(ProposalPlanningRunRepository, "get_latest_by_proposal_ids", AsyncMock(return_value={}))
     monkeypatch.setattr(WorkspaceRepository, "list_for_user", _fake_user_workspaces)
 
     async def run_request() -> httpx.Response:
@@ -238,6 +310,7 @@ def test_get_proposal_hides_unscoped_record(monkeypatch) -> None:
         return _proposal(id=pid, repo="other/repo", project="other")
 
     monkeypatch.setattr(ProductProposalRepository, "get", fake_get)
+    monkeypatch.setattr(ProposalPlanningRunRepository, "get_latest_by_proposal", AsyncMock(return_value=None))
     monkeypatch.setattr(WorkspaceRepository, "list_for_user", _fake_user_workspaces)
 
     async def run_request() -> httpx.Response:

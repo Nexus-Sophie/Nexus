@@ -25,6 +25,8 @@ from src.server.postgres.models import (
 from src.server.postgres.repositories import (
     AgentInstanceRepository,
     GithubPullRequestFeedbackRepository,
+    ProductProposalRepository,
+    ProposalPlanningRunRepository,
     TaskRepository,
     TaskWorkItemRepository,
     WorkspaceRepository,
@@ -586,7 +588,16 @@ async def _claim_running(
             lease_seconds=lease_seconds,
             expected_agent_instance_id=expected_agent_instance_id,
         )
-        return task is not None
+        if task is None:
+            return False
+        if task.category == TaskCategory.pm:
+            # Only planning PM tasks can have a linked proposal-planning run.
+            # Keep the condition here so readers do not have to inspect repository
+            # internals to understand why most tasks do not touch this state.
+            planning_run = await ProposalPlanningRunRepository.get_by_task_id(session, task_id)
+            if planning_run is not None:
+                await ProposalPlanningRunRepository.set_running(session, planning_run.id)
+    return True
 
 
 async def _lease_heartbeat(
@@ -677,6 +688,22 @@ async def _release_workspace(database: Database, agent_instance_id: uuid.UUID) -
 async def _mark_waiting_for_review(database: Database, task_id: uuid.UUID, result: str | None) -> None:
     async with database.session() as session:
         await TaskRepository.set_waiting_for_review(session, task_id, result=result)
+        planning_run = await ProposalPlanningRunRepository.get_by_task_id(session, task_id)
+        if planning_run is None:
+            return
+
+        # PM tasks historically finished at `waiting_for_review`. Proposal planning
+        # needs one extra gate: do not leave the proposal looking "planned" unless
+        # the run produced features and feature items that downstream workflow can use.
+        validation_error = await ProposalPlanningRunRepository.validate_plan(session, planning_run.proposal_id)
+        if validation_error is not None:
+            await TaskRepository.set_failed(session, task_id, error=validation_error)
+            await ProposalPlanningRunRepository.set_failed(session, planning_run.id, error=validation_error)
+            return
+
+        await ProposalPlanningRunRepository.set_completed(session, planning_run.id)
+        await ProductProposalRepository.sync_status_from_features(session, planning_run.proposal_id)
+        await session.commit()
 
 
 async def _mark_post_execution_wait_state(
@@ -793,4 +820,10 @@ def _format_github_feedback_message(item: GithubPullRequestFeedbackRecord) -> st
 
 async def _mark_failed(database: Database, task_id: uuid.UUID, error: str) -> None:
     async with database.session() as session:
-        await TaskRepository.set_failed(session, task_id, error=error)
+        task = await TaskRepository.set_failed(session, task_id, error=error)
+        if task is None or task.category != TaskCategory.pm:
+            return
+
+        planning_run = await ProposalPlanningRunRepository.get_by_task_id(session, task_id)
+        if planning_run is not None:
+            await ProposalPlanningRunRepository.set_failed(session, planning_run.id, error=error)

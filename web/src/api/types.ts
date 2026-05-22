@@ -64,6 +64,8 @@ export interface ApiTaskMessage {
   meta: Record<string, unknown> | null;
 }
 
+// Business-level proposal status. `approved` only means human approval happened;
+// the actual planning attempt is tracked separately by `latest_planning_run`.
 export type ApiProductProposalStatus =
   | 'proposed'
   | 'approved'
@@ -97,8 +99,23 @@ export interface ApiProductProposal {
   repo: string | null;
   status: ApiProductProposalStatus;
   source_task_id: string | null;
+  latest_planning_run: ApiProposalPlanningRun | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ApiProposalPlanningRun {
+  id: string;
+  proposal_id: string;
+  task_id: string;
+  attempt: number;
+  // Operational status of one planning attempt for the approved proposal.
+  status: 'queued' | 'running' | 'failed' | 'completed';
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 }
 
 export interface ApiFeatureItem {
