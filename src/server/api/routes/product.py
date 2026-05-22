@@ -67,6 +67,7 @@ async def create_proposal(
     payload: ProductProposalCreateRequest,
     user: UserRecord = Depends(get_current_user),
 ) -> ProductProposalResponse:
+    """Create a product proposal for an accessible workspace."""
     database: Database = request.app.state.database
     async with database.session() as session:
         # Product proposals do not store a user_id directly. Access is derived from
@@ -105,6 +106,7 @@ async def list_proposals(
     limit: int = Query(default=200, ge=1, le=1000),
     user: UserRecord = Depends(get_current_user),
 ) -> list[ProductProposalResponse]:
+    """List product proposals visible to the current user."""
     database: Database = request.app.state.database
     async with database.session() as session:
         workspaces = await WorkspaceRepository.list_for_user(session, user_id=user.id)
@@ -144,6 +146,7 @@ async def get_proposal(
     proposal_id: uuid.UUID,
     user: UserRecord = Depends(get_current_user),
 ) -> ProductProposalResponse:
+    """Return one product proposal visible to the current user."""
     database: Database = request.app.state.database
     async with database.session() as session:
         proposal = await ProductProposalRepository.get(session, proposal_id)
@@ -168,6 +171,7 @@ async def update_proposal_status(
     payload: ProductProposalStatusUpdateRequest,
     user: UserRecord = Depends(get_current_user),
 ) -> ProductProposalResponse:
+    """Update product proposal status and schedule planning when approved."""
     database: Database = request.app.state.database
     runner: AgentTaskRunner = request.app.state.runner
     async with database.session() as session:
@@ -274,6 +278,7 @@ async def list_features(
     limit: int = Query(default=200, ge=1, le=1000),
     user: UserRecord = Depends(get_current_user),
 ) -> list[FeatureResponse]:
+    """List features visible to the current user."""
     database: Database = request.app.state.database
     async with database.session() as session:
         workspaces = await WorkspaceRepository.list_for_user(session, user_id=user.id)
@@ -293,6 +298,7 @@ async def get_feature(
     feature_id: uuid.UUID,
     user: UserRecord = Depends(get_current_user),
 ) -> FeatureResponse:
+    """Return one feature visible to the current user."""
     database: Database = request.app.state.database
     async with database.session() as session:
         feature = await FeatureRepository.get(session, feature_id)
