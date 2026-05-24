@@ -28,6 +28,8 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    init: true
+    stop_grace_period: ${NEXUS_API_STOP_GRACE_PERIOD:-1m}
     env_file: .env.production
     command: ["api"]
     volumes:
@@ -49,6 +51,8 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    init: true
+    stop_grace_period: ${NEXUS_WORKER_STOP_GRACE_PERIOD:-1h}
     env_file: .env.production
     command: ["worker"]
     volumes:
@@ -70,6 +74,11 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 5 -O - http://127.0.0.1/health >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 volumes:
   postgres-data:

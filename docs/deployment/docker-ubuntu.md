@@ -63,7 +63,15 @@ Set real OpenAI-compatible API credentials, GitHub tokens, repository name, and 
 ./scripts/deploy-production.sh
 ```
 
+The deploy script now:
+
+- pulls newer base images before rebuilding local images;
+- waits for the stack to become healthy before returning; and
+- honors a long worker shutdown grace period so in-flight Celery tasks can finish instead of being cold-killed after 10 seconds.
+
 Open `http://SERVER_IP:6515/` for the dashboard. The API health endpoint is `http://SERVER_IP:6515/health`.
+
+If your agents routinely run for a long time, keep the default worker grace period. To override it, add `NEXUS_WORKER_STOP_GRACE_PERIOD=30m` (or another Compose duration) to `.env.production`. If you need the deploy command to fail faster while waiting for health checks, run it with `COMPOSE_WAIT_TIMEOUT=300 ./scripts/deploy-production.sh`.
 
 ## 5. Operations
 
