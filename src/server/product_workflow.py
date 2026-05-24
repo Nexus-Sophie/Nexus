@@ -9,6 +9,7 @@ from src.server.postgres.database import Database
 from src.server.postgres.models import AgentName
 from src.server.postgres.repositories import AgentInstanceRepository, FeatureItemRepository, TaskRepository
 from src.server.runner import AgentTaskRunner
+from src.server.services import product_workflow_dispatch
 from src.server.schemas import AgentKind, TaskCreateRequest
 
 
@@ -29,7 +30,7 @@ class ProductWorkflowPoller:
 
     def start(self) -> None:
         """Start the background poller."""
-        if self._settings.product_discovery_poll_interval_seconds <= 0:
+        if self._settings.product_workflow_poll_interval_seconds <= 0:
             logger.info("Product workflow poller is disabled.")
             return
         if self._task is not None:
@@ -49,16 +50,37 @@ class ProductWorkflowPoller:
         """Run one polling cycle."""
         published_count = 0
         while not self._stop_event.is_set():
-            published = await self._publish_one_feature_item()
-            if not published:
+            round_published = await self._publish_one_dispatch_round()
+            if round_published == 0:
                 return published_count
-            published_count += 1
+            published_count += round_published
         return published_count
 
-    async def _publish_one_feature_item(self) -> bool:
-        """Publish one pending feature item as a coding task."""
+    async def _publish_one_dispatch_round(self) -> int:
+        """Publish at most one item per `(user, repo, project)` group."""
         async with self._database.session() as session:
-            item = await FeatureItemRepository.get_next_unassigned(session)
+            dispatch_groups = await product_workflow_dispatch.list_pending_dispatch_groups(session)
+        published_count = 0
+        for dispatch_group in dispatch_groups:
+            if self._stop_event.is_set():
+                break
+            # Round-robin across workflow groups so one user's unavailable Tela
+            # does not block other users' pending feature items.
+            published = await self._publish_one_feature_item_for_group(dispatch_group)
+            if published:
+                published_count += 1
+        return published_count
+
+    async def _publish_one_feature_item_for_group(
+        self,
+        dispatch_group: product_workflow_dispatch.FeatureItemDispatchGroup,
+    ) -> bool:
+        """Publish the next pending feature item for one workflow group."""
+        async with self._database.session() as session:
+            item = await product_workflow_dispatch.get_next_unassigned_for_dispatch_group(
+                session,
+                dispatch_group=dispatch_group,
+            )
             if item is None:
                 return False
             if await FeatureItemRepository.get_feature(session, item.id) is None:
@@ -80,7 +102,13 @@ class ProductWorkflowPoller:
                 limit=1,
             )
             if not tela_instances:
-                logger.warning("Skip feature item task publishing because no active Tela agent instance is available.")
+                logger.warning(
+                    "Skip feature item %s because no active Tela agent instance is available for user=%s repo=%s project=%s.",
+                    item.id,
+                    proposal.user_id,
+                    proposal.repo,
+                    proposal.project,
+                )
                 return False
 
         task_id = await self._runner.submit_task(
@@ -113,7 +141,7 @@ class ProductWorkflowPoller:
             try:
                 await asyncio.wait_for(
                     self._stop_event.wait(),
-                    timeout=self._settings.product_discovery_poll_interval_seconds,
+                    timeout=self._settings.product_workflow_poll_interval_seconds,
                 )
             except asyncio.TimeoutError:
                 continue

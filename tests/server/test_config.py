@@ -29,6 +29,19 @@ def test_product_discovery_poll_interval_defaults_to_hourly(monkeypatch):
     assert settings.product_discovery_poll_interval_seconds == 3600
 
 
+def test_product_workflow_poll_interval_defaults_to_minutely(monkeypatch):
+    """Verify product workflow poll interval defaults to one minute."""
+    get_settings.cache_clear()
+    monkeypatch.delenv("NEXUS_PRODUCT_WORKFLOW_POLL_INTERVAL_SECONDS", raising=False)
+
+    try:
+        settings = get_settings()
+    finally:
+        get_settings.cache_clear()
+
+    assert settings.product_workflow_poll_interval_seconds == 60
+
+
 def test_frontend_base_url_is_loaded(monkeypatch):
     """Verify frontend base url is loaded."""
     get_settings.cache_clear()
@@ -79,3 +92,16 @@ def test_product_discovery_pending_proposal_limit_is_loaded(monkeypatch):
         get_settings.cache_clear()
 
     assert settings.product_discovery_pending_proposal_limit == 7
+
+
+def test_product_workflow_poll_interval_is_loaded(monkeypatch):
+    """Verify product workflow poll interval is loaded."""
+    get_settings.cache_clear()
+    monkeypatch.setenv("NEXUS_PRODUCT_WORKFLOW_POLL_INTERVAL_SECONDS", "15")
+
+    try:
+        settings = get_settings()
+    finally:
+        get_settings.cache_clear()
+
+    assert settings.product_workflow_poll_interval_seconds == 15

@@ -736,21 +736,6 @@ class FeatureRepository:
 
 class FeatureItemRepository:
     @staticmethod
-    async def get_next_unassigned(session: AsyncSession) -> FeatureItemRecord | None:
-        """Return the next unassigned feature item."""
-        query = (
-            select(FeatureItemRecord)
-            .where(
-                FeatureItemRecord.task_id.is_(None),
-                FeatureItemRecord.status == FeatureItemStatus.pending,
-            )
-            .order_by(FeatureItemRecord.created_at.asc(), FeatureItemRecord.order_index.asc())
-            .limit(1)
-        )
-        result = await session.execute(query)
-        return result.scalar_one_or_none()
-
-    @staticmethod
     async def get_feature(session: AsyncSession, item_id: uuid.UUID) -> FeatureRecord | None:
         """Return the related feature record."""
         query = (

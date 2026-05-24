@@ -42,6 +42,7 @@ class Settings:
     product_discovery_poll_task_limit: int
     product_discovery_recent_proposal_limit: int
     product_discovery_pending_proposal_limit: int
+    product_workflow_poll_interval_seconds: int
 
 
 @lru_cache(maxsize=1)
@@ -119,5 +120,8 @@ def get_settings() -> Settings:
         ),
         product_discovery_pending_proposal_limit=int(
             os.getenv("NEXUS_PRODUCT_DISCOVERY_PENDING_PROPOSAL_LIMIT", "50"),
+        ),
+        product_workflow_poll_interval_seconds=int(
+            os.getenv("NEXUS_PRODUCT_WORKFLOW_POLL_INTERVAL_SECONDS", "60"),
         ),
     )
