@@ -69,7 +69,9 @@ The deploy script now:
 - waits for the stack to become healthy before returning; and
 - honors a long worker shutdown grace period so in-flight Celery tasks can finish instead of being cold-killed after 10 seconds.
 
-Open `http://SERVER_IP:6515/` for the dashboard. The API health endpoint is `http://SERVER_IP:6515/health`.
+By default, the stack publishes the frontend on host port `80`. If you need a different external port, set `NEXUS_HTTP_PORT=6515` (or another port) in `.env.production` and keep `NEXUS_FRONTEND_BASE_URL` aligned with the public URL.
+
+Open `http://SERVER_IP/` for the dashboard. The API health endpoint is `http://SERVER_IP/health`.
 
 If your agents routinely run for a long time, keep the default worker grace period. To override it, add `NEXUS_WORKER_STOP_GRACE_PERIOD=30m` (or another Compose duration) to `.env.production`. If you need the deploy command to fail faster while waiting for health checks, run it with `COMPOSE_WAIT_TIMEOUT=300 ./scripts/deploy-production.sh`.
 
