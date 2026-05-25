@@ -1,9 +1,13 @@
 # syntax=docker/dockerfile:1.7
 FROM python:3.12-slim AS runtime
 
+ARG UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
+    UV_DEFAULT_INDEX=${UV_DEFAULT_INDEX} \
+    UV_HTTP_TIMEOUT=12000 \
     UV_LINK_MODE=copy \
     PATH="/app/.venv/bin:$PATH"
 
@@ -15,10 +19,12 @@ RUN apt-get update \
 
 COPY --from=ghcr.io/astral-sh/uv:0.5.31 /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
 
 COPY . .
-RUN uv sync --frozen --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev
 
 RUN mkdir -p /workspace
 COPY docker/backend/entrypoint.sh /usr/local/bin/nexus-entrypoint
