@@ -5,7 +5,7 @@ from typing import Literal, Any, List, Dict, Callable, Coroutine, TypedDict, Req
 from dataclasses import dataclass
 from textwrap import dedent
 from pydantic import BaseModel, ConfigDict, model_validator
-from openai import AsyncOpenAI, RateLimitError, APIConnectionError
+from openai import AsyncOpenAI, RateLimitError, APIConnectionError, APIError
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion_message_param import (
     ChatCompletionMessageParam, 
@@ -164,6 +164,16 @@ class Agent(BaseModel):
                 )
                 await asyncio.sleep(60)
                 continue
+
+            except APIError as api_error:
+                # Concurrency limit trigger the api error now
+                api_error_msg = str(api_error)
+                if "limit" in api_error_msg or "retry" in api_error_msg:
+                    logger.warning(
+                        f"Agent {self.name} triggers concurrency limit and start waiting for 1 minute."
+                    )
+                    await asyncio.sleep(60)
+                    continue
             
             tries += 1
         
