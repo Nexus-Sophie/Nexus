@@ -61,8 +61,7 @@ async def execute_agent_task(
     *,
     task_id: uuid.UUID,
     settings: Settings | None = None,
-    recovered: bool = False,
-    dispatch_token: str | None = None,
+    allow_running: bool = False,
 ) -> None:
     """Execute an agent task by id."""
     cfg = settings or get_settings()
@@ -70,8 +69,6 @@ async def execute_agent_task(
     await database.connect()
 
     pending_checkpoint_tasks: set[asyncio.Task[Any]] = set()
-    stop_lease_heartbeat = asyncio.Event()
-    lease_heartbeat_task: asyncio.Task[Any] | None = None
     binding: _ExecutionBinding | None = None
     task: TaskRecord | None = None
 
@@ -131,8 +128,19 @@ async def execute_agent_task(
     try:
         task = await _load_task(database, task_id)
 
-        if not dispatch_token:
-            logger.warning("Worker message missing dispatch token; skip execution and wait for redispatch.")
+        if task.status == TaskStatus.running and not allow_running:
+            logger.info(
+                "Task %s delivery is a duplicate because task is already running; skipping.",
+                task_id,
+            )
+            return
+
+        if task.status not in {TaskStatus.queued, TaskStatus.running}:
+            logger.info(
+                "Task %s delivery is stale because task is already %s; skipping.",
+                task_id,
+                task.status.value,
+            )
             return
 
         binding = await _load_binding(database, task)
@@ -142,37 +150,22 @@ async def execute_agent_task(
         task.project = binding.project
         await _mark_workspace_running(database, task.agent_instance_id)
 
-        # Worker can start only if it proves it owns the latest dispatch lease token.
-        started = await _claim_running(
+        running_task = await _mark_task_running(
             database,
             task_id,
-            dispatch_token=dispatch_token,
-            lease_seconds=cfg.task_dispatch_lease_seconds,
             expected_agent_instance_id=task.agent_instance_id,
+            allow_running=allow_running,
         )
-        if not started:
+        if running_task is None:
             logger.warning(
-                "Task %s lease claim failed; stale or duplicate broker delivery will be skipped.",
+                "Task %s could not enter running state; stale delivery will be skipped.",
                 task_id,
             )
             return
-
-        # Heartbeat keeps lease fresh so recovery only picks truly orphaned running tasks.
-        lease_heartbeat_task = asyncio.create_task(
-            _lease_heartbeat(
-                database=database,
-                task_id=task_id,
-                dispatch_token=dispatch_token,
-                lease_seconds=cfg.task_dispatch_lease_seconds,
-                stop_event=stop_lease_heartbeat,
-            )
-        )
+        task = running_task
 
         logger.info(
-            "%s task %s accepted for execution in workspace %s.",
-            "Recovered"
-            if recovered
-            else "Fresh",
+            "Task %s accepted for execution in workspace %s.",
             task_id,
             binding.workspace_key,
         )
@@ -185,7 +178,6 @@ async def execute_agent_task(
             user_id=binding.user_id,
             workspace_key=binding.workspace_key,
             github_repo=binding.github_repo,
-            recovered=recovered,
         )
 
         if task is not None and task.category == TaskCategory.coding:
@@ -197,13 +189,9 @@ async def execute_agent_task(
         await _mark_failed(database, task_id, str(exc))
         raise
     finally:
-        stop_lease_heartbeat.set()
-
         awaitables: list[asyncio.Task[Any]] = []
         if pending_checkpoint_tasks:
             awaitables.extend(pending_checkpoint_tasks)
-        if lease_heartbeat_task is not None:
-            awaitables.append(lease_heartbeat_task)
 
         if awaitables:
             await asyncio.gather(*awaitables, return_exceptions=True)
@@ -223,7 +211,6 @@ async def _run_agent_workflow(
     user_id: uuid.UUID,
     workspace_key: str,
     github_repo: str | None,
-    recovered: bool,
 ):
     """Run the end-to-end agent workflow."""
     if task.category == TaskCategory.coding:
@@ -235,7 +222,6 @@ async def _run_agent_workflow(
             user_id=user_id,
             workspace_key=workspace_key,
             github_repo=github_repo,
-            recovered=recovered,
         )
         return
     if task.category == TaskCategory.pm:
@@ -261,7 +247,6 @@ async def _run_code_agent_workflow(
     user_id: uuid.UUID,
     workspace_key: str,
     github_repo: str | None,
-    recovered: bool,
 ):
     """Run a code-agent task workflow."""
     nexus_context = NexusTaskContext(
@@ -288,6 +273,15 @@ async def _run_code_agent_workflow(
             limit=getattr(settings, "github_feedback_batch_size", 20),
         )
         if claimed_feedback:
+            feedback_prompt = _build_github_feedback_prompt(task, claimed_feedback)
+            if _checkpoint_completed_prompt(checkpoint, feedback_prompt):
+                logger.info(
+                    "Task %s GitHub feedback was already completed in checkpoint; marking feedback processed.",
+                    task.id,
+                )
+                await _mark_github_feedback_processed(database, claimed_feedback)
+                return
+
             logger.info(
                 "Task %s is resuming from checkpoint to process %s GitHub feedback item(s).",
                 task.id,
@@ -297,7 +291,7 @@ async def _run_code_agent_workflow(
             try:
                 await _run_agent(
                     agent=agent,
-                    question=_build_github_feedback_prompt(task, claimed_feedback),
+                    question=feedback_prompt,
                     checkpoint=checkpoint,
                     on_progress=on_progress,
                 )
@@ -311,12 +305,20 @@ async def _run_code_agent_workflow(
             async with database.session() as session:
                 work_items = await TaskWorkItemRepository.list_by_task(session, task.id)
             # refresh to get the latest checkpoint
-            # pass checkpoint whether the task is recovered or not.
+            # Always pass the latest checkpoint so Celery redelivery can continue
+            # from the last safe replay boundary.
             checkpoint = await _get_latest_checkpoint(database, task.id)
 
             # first not work_items -> run once
             # agent maybe generate work_items also maybe not.
             if not work_items:
+                if _checkpoint_has_completed_turn(checkpoint):
+                    logger.info(
+                        "Task %s has a completed checkpoint and no Nexus work items; skipping agent rerun.",
+                        task.id,
+                    )
+                    break
+
                 logger.info("Task %s has no Nexus work items; starting normal task run.", task.id)
                 nexus_context.current_work_item_id = None
                 # first run agent pass original task.question
@@ -419,6 +421,14 @@ async def _run_pm_agent_workflow(
         agent.set_nexus_task_context(nexus_context)
     async with agent:
         checkpoint = await _get_latest_checkpoint(database, task.id)
+        if _checkpoint_has_completed_turn(checkpoint):
+            await _mark_waiting_for_review(
+                database,
+                task.id,
+                _checkpoint_completion_text(checkpoint),
+            )
+            return
+
         response = await _run_agent(
             agent=agent,
             question=task.question,
@@ -476,6 +486,70 @@ async def _run_agent(
     if checkpoint:
         work_kwargs["checkpoint"] = checkpoint
     return await agent.work(**work_kwargs)
+
+
+def _checkpoint_has_completed_turn(checkpoint: list[ChatCompletionMessageParam] | None) -> bool:
+    """Return whether a checkpoint ends after a completed assistant turn."""
+    if not checkpoint:
+        return False
+
+    last_message = checkpoint[-1]
+    return (
+        _message_field(last_message, "role") == "assistant"
+        and not _message_field(last_message, "tool_calls")
+    )
+
+
+def _checkpoint_completed_prompt(
+    checkpoint: list[ChatCompletionMessageParam] | None,
+    prompt: str,
+) -> bool:
+    """Return whether the checkpoint completed the given prompt."""
+    return _checkpoint_has_completed_turn(checkpoint) and _last_user_prompt(checkpoint) == prompt
+
+
+def _checkpoint_completion_text(checkpoint: list[ChatCompletionMessageParam] | None) -> str | None:
+    """Extract final assistant text from a completed checkpoint."""
+    if not _checkpoint_has_completed_turn(checkpoint):
+        return None
+    return _content_to_text(_message_field(checkpoint[-1], "content")) if checkpoint else None
+
+
+def _last_user_prompt(checkpoint: list[ChatCompletionMessageParam] | None) -> str | None:
+    """Return the last user prompt stored in a checkpoint."""
+    if not checkpoint:
+        return None
+
+    for message in reversed(checkpoint):
+        if _message_field(message, "role") == "user":
+            return _content_to_text(_message_field(message, "content"))
+    return None
+
+
+def _message_field(message: ChatCompletionMessageParam, field: str) -> Any:
+    """Read a field from a dict-like OpenAI message."""
+    if isinstance(message, dict):
+        return message.get(field)
+    return getattr(message, field, None)
+
+
+def _content_to_text(content: Any) -> str | None:
+    """Normalize OpenAI message content into text for checkpoint comparisons."""
+    if content is None:
+        return None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts) if parts else None
+    return str(content)
 
 
 def _build_agent(
@@ -598,25 +672,23 @@ async def _load_binding(database: Database, task: TaskRecord) -> _ExecutionBindi
     )
 
 
-async def _claim_running(
+async def _mark_task_running(
     database: Database,
     task_id: uuid.UUID,
     *,
-    dispatch_token: str,
-    lease_seconds: int,
     expected_agent_instance_id: uuid.UUID,
-) -> bool:
-    """Claim a task for execution."""
+    allow_running: bool,
+) -> TaskRecord | None:
+    """Mark a queued or redelivered running task as executing."""
     async with database.session() as session:
-        task = await TaskRepository.claim_dispatched_running(
+        task = await TaskRepository.set_running(
             session,
             task_id,
-            dispatch_token=dispatch_token,
-            lease_seconds=lease_seconds,
             expected_agent_instance_id=expected_agent_instance_id,
+            allow_running=allow_running,
         )
         if task is None:
-            return False
+            return None
         if task.category == TaskCategory.pm:
             # Only planning PM tasks can have a linked proposal-planning run.
             # Keep the condition here so readers do not have to inspect repository
@@ -624,56 +696,7 @@ async def _claim_running(
             planning_run = await ProposalPlanningRunRepository.get_by_task_id(session, task_id)
             if planning_run is not None:
                 await ProposalPlanningRunRepository.set_running(session, planning_run.id)
-    return True
-
-
-async def _lease_heartbeat(
-    *,
-    database: Database,
-    task_id: uuid.UUID,
-    dispatch_token: str,
-    lease_seconds: int,
-    stop_event: asyncio.Event,
-) -> None:
-    """Keep a running task lease alive."""
-    interval_seconds = max(1, lease_seconds // 3)
-
-    while not stop_event.is_set():
-        extended = await _extend_lease(
-            database,
-            task_id,
-            dispatch_token=dispatch_token,
-            lease_seconds=lease_seconds,
-        )
-        if not extended:
-            logger.warning(
-                "Stop lease heartbeat for task %s because lease extension failed.",
-                task_id,
-            )
-            return
-
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
-        except asyncio.TimeoutError:
-            continue
-
-
-async def _extend_lease(
-    database: Database,
-    task_id: uuid.UUID,
-    *,
-    dispatch_token: str,
-    lease_seconds: int,
-) -> bool:
-    """Extend a task execution lease."""
-    async with database.session() as session:
-        return await TaskRepository.extend_lease(
-            session,
-            task_id,
-            dispatch_token=dispatch_token,
-            lease_seconds=lease_seconds,
-            require_running=True,
-        )
+        return task
 
 
 async def _mark_workspace_running(

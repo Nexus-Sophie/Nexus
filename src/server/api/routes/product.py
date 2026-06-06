@@ -22,7 +22,7 @@ from src.server.postgres.repositories import (
     TaskRepository,
     WorkspaceRepository,
 )
-from src.server.runner import AgentTaskRunner
+from src.server.runner import AgentTaskRunner, TaskDispatchError
 from src.server.services.proposal_planning import (
     NoActiveMarcAgentInstanceError,
     ProposalNotFoundAfterPlanningStartError,
@@ -190,6 +190,8 @@ async def update_proposal_status(
                 raise HTTPException(status_code=409, detail="No active Marc agent instance is available") from exc
             except ProposalNotFoundAfterPlanningStartError as exc:
                 raise HTTPException(status_code=404, detail="Proposal not found") from exc
+            except TaskDispatchError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
         latest_planning_run = await ProposalPlanningRunRepository.get_latest_by_proposal(session, proposal.id)
         latest_planning_task_exists = None
         if latest_planning_run is not None:
@@ -244,6 +246,8 @@ async def retry_proposal_planning(
             raise HTTPException(status_code=409, detail="No active Marc agent instance is available") from exc
         except ProposalNotFoundAfterPlanningStartError as exc:
             raise HTTPException(status_code=404, detail="Proposal not found") from exc
+        except TaskDispatchError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         latest_planning_run = await ProposalPlanningRunRepository.get_latest_by_proposal(session, proposal.id)
         latest_planning_task_exists = None
         if latest_planning_run is not None:

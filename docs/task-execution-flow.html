@@ -1,0 +1,905 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nexus Task Execution Flow</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --panel-strong: #f0f4f8;
+      --ink: #18202a;
+      --muted: #647184;
+      --line: #ccd6e2;
+      --line-strong: #34586f;
+      --blue: #2f6b9a;
+      --green: #27815d;
+      --amber: #a76512;
+      --red: #b23a42;
+      --violet: #6f5aa8;
+      --shadow: 0 10px 28px rgba(31, 43, 56, 0.12);
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+    }
+
+    header {
+      padding: 28px 28px 18px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 26px;
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 1020px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: 250px minmax(620px, 1fr) 330px;
+      gap: 18px;
+      padding: 18px;
+      min-height: calc(100vh - 111px);
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .sidebar,
+    .details {
+      padding: 14px;
+      min-width: 0;
+    }
+
+    .section-title {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .scenario-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .scenario-button {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      color: var(--ink);
+      cursor: pointer;
+      padding: 10px 11px;
+      text-align: left;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .scenario-button:hover,
+    .scenario-button:focus-visible {
+      border-color: var(--blue);
+      outline: none;
+    }
+
+    .scenario-button.active {
+      border-color: var(--blue);
+      background: #eaf3fb;
+      color: #123a55;
+      font-weight: 700;
+    }
+
+    .legend {
+      display: grid;
+      gap: 8px;
+      margin-top: 18px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .legend-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 4px;
+      border: 1px solid var(--line);
+      flex: 0 0 auto;
+    }
+
+    .swatch.entry { background: #eaf3fb; border-color: #8db8dc; }
+    .swatch.db { background: #ecf7f1; border-color: #8ec5ac; }
+    .swatch.worker { background: #f7f1fb; border-color: #b7a2cf; }
+    .swatch.failure { background: #fff1f0; border-color: #e0a0a5; }
+
+    .canvas {
+      padding: 16px;
+      overflow: auto;
+      min-width: 0;
+    }
+
+    .flow-grid {
+      min-width: 880px;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      grid-auto-rows: minmax(82px, auto);
+      gap: 12px;
+      align-items: stretch;
+      position: relative;
+    }
+
+    .node {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      padding: 11px;
+      cursor: pointer;
+      min-height: 82px;
+      position: relative;
+      transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+    }
+
+    .node:hover,
+    .node:focus-visible {
+      outline: none;
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(47, 107, 154, 0.14);
+    }
+
+    .node.active {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(47, 107, 154, 0.16);
+      transform: translateY(-1px);
+    }
+
+    .node.path {
+      border-color: var(--line-strong);
+      background: #fbfdff;
+    }
+
+    .node.entry { background: #f7fbff; }
+    .node.db { background: #f8fdfb; }
+    .node.worker { background: #fcf9ff; }
+    .node.failure { background: #fffafa; }
+
+    .node-title {
+      margin: 0 0 7px;
+      font-size: 14px;
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+
+    .node-meta {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      border-radius: 999px;
+      padding: 2px 8px;
+      margin-top: 8px;
+      font-size: 11px;
+      font-weight: 700;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: var(--panel);
+    }
+
+    .badge.good { color: var(--green); border-color: #a9d4bf; background: #effaf4; }
+    .badge.warn { color: var(--amber); border-color: #e2bd80; background: #fff7eb; }
+    .badge.bad { color: var(--red); border-color: #e0a0a5; background: #fff1f0; }
+    .badge.info { color: var(--blue); border-color: #9ac1df; background: #eef7ff; }
+    .badge.worker { color: var(--violet); border-color: #c8b7da; background: #f8f3fd; }
+
+    .edge {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      min-height: 28px;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfe;
+    }
+
+    .edge.path {
+      color: var(--line-strong);
+      border-color: var(--line-strong);
+      background: #eef5f9;
+    }
+
+    .span-2 { grid-column: span 2; }
+    .span-3 { grid-column: span 3; }
+    .col-1 { grid-column: 1; }
+    .col-2 { grid-column: 2; }
+    .col-3 { grid-column: 3; }
+    .col-4 { grid-column: 4; }
+    .col-5 { grid-column: 5; }
+
+    .details h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .details p {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .detail-list {
+      display: grid;
+      gap: 9px;
+      margin: 0 0 14px;
+      padding: 0;
+      list-style: none;
+    }
+
+    .detail-list li {
+      border-left: 3px solid var(--line);
+      padding-left: 9px;
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .code-ref {
+      display: block;
+      width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 8px;
+      margin-top: 6px;
+      background: var(--panel-strong);
+      color: #36485b;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 7px;
+      margin-top: 12px;
+    }
+
+    .timeline-step {
+      display: grid;
+      grid-template-columns: 24px 1fr;
+      gap: 8px;
+      align-items: start;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .step-index {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--panel-strong);
+      color: var(--line-strong);
+      font-weight: 800;
+      border: 1px solid var(--line);
+    }
+
+    .invariants {
+      margin-top: 18px;
+      padding: 12px;
+      border: 1px solid #b7c8d8;
+      border-radius: var(--radius);
+      background: #f7fbff;
+    }
+
+    .invariants strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+
+    .invariants code,
+    .detail-list code,
+    .node-meta code {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 0.95em;
+      color: #20394f;
+    }
+
+    @media (max-width: 1180px) {
+      main {
+        grid-template-columns: 220px minmax(520px, 1fr);
+      }
+      .details {
+        grid-column: 1 / -1;
+      }
+    }
+
+    @media (max-width: 760px) {
+      header {
+        padding: 20px 16px 14px;
+      }
+      main {
+        display: block;
+        padding: 12px;
+      }
+      .panel {
+        margin-bottom: 12px;
+      }
+      .flow-grid {
+        min-width: 840px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Nexus Task / Celery 数据流</h1>
+    <p class="subtitle">
+      当前版本没有 startup queued 补发。任务创建成功的定义是 PostgreSQL 记录创建成功，并且 Celery broker publish 成功。worker 丢失后的恢复交给 Celery redelivery，执行侧只根据 task 状态和 checkpoint 决定继续还是跳过。
+    </p>
+  </header>
+
+  <main>
+    <aside class="panel sidebar">
+      <p class="section-title">Scenarios</p>
+      <div class="scenario-list" id="scenarioList"></div>
+
+      <div class="legend">
+        <p class="section-title">Legend</p>
+        <div class="legend-row"><span class="swatch entry"></span><span>入口 / API / poller</span></div>
+        <div class="legend-row"><span class="swatch db"></span><span>PostgreSQL 状态</span></div>
+        <div class="legend-row"><span class="swatch worker"></span><span>Celery worker 执行</span></div>
+        <div class="legend-row"><span class="swatch failure"></span><span>失败或跳过路径</span></div>
+      </div>
+    </aside>
+
+    <section class="panel canvas" aria-label="task execution flow graph">
+      <div class="flow-grid" id="flowGrid">
+        <button class="node entry col-1" data-node="task-api">
+          <h3 class="node-title">POST /v1/tasks</h3>
+          <p class="node-meta">用户提交普通 coding/pm task。</p>
+          <span class="badge info">API</span>
+        </button>
+
+        <button class="node entry col-2" data-node="discovery">
+          <h3 class="node-title">Product Discovery Poll</h3>
+          <p class="node-meta">只选择没有活跃 PM task 的 Marc instance。</p>
+          <span class="badge info">Poller</span>
+        </button>
+
+        <button class="node entry col-3" data-node="proposal">
+          <h3 class="node-title">Proposal Approved</h3>
+          <p class="node-meta">创建 Marc planning task 和 planning run。</p>
+          <span class="badge info">Product</span>
+        </button>
+
+        <div class="edge col-4" data-edge="entry-runner">entry -> runner</div>
+
+        <button class="node db col-5" data-node="runner">
+          <h3 class="node-title">Runner</h3>
+          <p class="node-meta">创建 <code>TaskRecord(status=queued)</code> 后同步 publish。</p>
+          <span class="badge good">source of publish</span>
+        </button>
+
+        <button class="node db span-2" data-node="candidate">
+          <h3 class="node-title">Discovery Candidate Gate</h3>
+          <p class="node-meta">阻止条件：同一 Marc instance 有 <code>pm queued/running</code>。</p>
+          <span class="badge warn">prevents duplicate discovery</span>
+        </button>
+
+        <div class="edge col-3" data-edge="candidate-runner">eligible -> submit_task</div>
+
+        <button class="node db col-4" data-node="dispatch">
+          <h3 class="node-title">Celery send_task</h3>
+          <p class="node-meta">发送到 Redis broker，使用 task_id 作为 Celery id。</p>
+          <span class="badge info">broker publish</span>
+        </button>
+
+        <button class="node failure col-5" data-node="publish-fail">
+          <h3 class="node-title">Publish Failed</h3>
+          <p class="node-meta">task failed，API 返回 503。</p>
+          <span class="badge bad">no queued leak</span>
+        </button>
+
+        <button class="node db col-1 span-2" data-node="queued">
+          <h3 class="node-title">DB status: queued</h3>
+          <p class="node-meta">只表示已创建记录，等待 broker/worker 接收。</p>
+          <span class="badge warn">not recovered at startup</span>
+        </button>
+
+        <div class="edge col-3" data-edge="dispatch-broker">send_task success</div>
+
+        <button class="node col-4" data-node="broker">
+          <h3 class="node-title">Redis Broker</h3>
+          <p class="node-meta">late ack 下消息在 worker 完成前保持 unacked。</p>
+          <span class="badge good">acks_late</span>
+        </button>
+
+        <button class="node worker col-5" data-node="celery-task">
+          <h3 class="node-title">run_agent_task</h3>
+          <p class="node-meta">读取 <code>delivery_info.redelivered</code>，传给 execution。</p>
+          <span class="badge worker">Celery</span>
+        </button>
+
+        <button class="node worker col-1" data-node="load-task">
+          <h3 class="node-title">Load Task</h3>
+          <p class="node-meta">按 task_id 从 PostgreSQL 读业务状态。</p>
+          <span class="badge worker">execution.py</span>
+        </button>
+
+        <button class="node failure col-2" data-node="duplicate">
+          <h3 class="node-title">running + not redelivered</h3>
+          <p class="node-meta">普通重复 delivery，直接 return 并 ack。</p>
+          <span class="badge bad">skip duplicate</span>
+        </button>
+
+        <button class="node failure col-3" data-node="stale">
+          <h3 class="node-title">stale status</h3>
+          <p class="node-meta">非 queued/running，跳过并 ack。</p>
+          <span class="badge bad">skip stale</span>
+        </button>
+
+        <button class="node db col-4" data-node="set-running">
+          <h3 class="node-title">Atomic set_running</h3>
+          <p class="node-meta"><code>queued -> running</code>，redelivery 可继续 running。</p>
+          <span class="badge good">claim execution</span>
+        </button>
+
+        <button class="node worker col-5" data-node="checkpoint">
+          <h3 class="node-title">Checkpoint Gate</h3>
+          <p class="node-meta">决定从 checkpoint 继续，还是跳过已完成 prompt。</p>
+          <span class="badge worker">replay boundary</span>
+        </button>
+
+        <button class="node worker span-2" data-node="coding-flow">
+          <h3 class="node-title">Coding Workflow</h3>
+          <p class="node-meta">GitHub feedback、work items、普通 coding task。</p>
+          <span class="badge worker">Sophie/Tela</span>
+        </button>
+
+        <button class="node worker span-2" data-node="pm-flow">
+          <h3 class="node-title">PM Workflow</h3>
+          <p class="node-meta">Marc 规划 proposal，完成后等待 review。</p>
+          <span class="badge worker">Marc</span>
+        </button>
+
+        <button class="node db col-5" data-node="final-state">
+          <h3 class="node-title">Final DB State</h3>
+          <p class="node-meta">waiting_for_review / failed / merged / closed。</p>
+          <span class="badge good">observable</span>
+        </button>
+      </div>
+    </section>
+
+    <aside class="panel details">
+      <p class="section-title">Details</p>
+      <h2 id="detailTitle"></h2>
+      <p id="detailSummary"></p>
+      <ul class="detail-list" id="detailList"></ul>
+      <div id="codeRefs"></div>
+
+      <div class="invariants">
+        <strong>当前不变量</strong>
+        <ul class="detail-list">
+          <li><code>queued</code> 不会在 startup 自动补发。</li>
+          <li>broker publish 失败必须进入 <code>failed</code>，并向调用方返回错误。</li>
+          <li><code>running</code> 的恢复只接受 Celery redelivery。</li>
+          <li>checkpoint 是 worker 重启后判断继续或跳过的依据。</li>
+        </ul>
+      </div>
+
+      <div class="timeline" id="timeline"></div>
+    </aside>
+  </main>
+
+  <script>
+    const nodes = {
+      "task-api": {
+        title: "POST /v1/tasks",
+        summary: "普通 task 的用户入口。route 只做 ownership 校验，真正创建和发布交给 Runner。",
+        bullets: [
+          "调用 runner.submit_task(payload)。",
+          "ValueError 返回 400。",
+          "TaskDispatchError 返回 503。"
+        ],
+        refs: ["src/server/api/routes/tasks.py:57", "src/server/api/routes/tasks.py:74"]
+      },
+      discovery: {
+        title: "Product Discovery Poll",
+        summary: "后台 poller 周期性为 eligible Marc instance 创建产品 discovery PM task。",
+        bullets: [
+          "先查候选 Marc instance。",
+          "再按 workspace 和 proposal metrics 决定是否 dispatch。",
+          "dispatch 失败会记录日志并跳过本轮该 instance。"
+        ],
+        refs: ["src/server/product_discovery.py:172", "src/server/product_discovery.py:211"]
+      },
+      proposal: {
+        title: "Proposal Approved",
+        summary: "proposal 被 approve 后，会创建一个独立 Marc planning task。",
+        bullets: [
+          "创建 TaskRecord 和 ProposalPlanningRun。",
+          "commit 后立即 dispatch planning task。",
+          "dispatch 失败返回 503，并由 runner 标记 failed。"
+        ],
+        refs: ["src/server/api/routes/product.py:183", "src/server/services/proposal_planning.py:43"]
+      },
+      runner: {
+        title: "Runner",
+        summary: "Runner 是 DB task 和 Celery broker 之间的同步发布边界。",
+        bullets: [
+          "先写入 TaskRecord(status=queued)。",
+          "commit DB 后调用 Celery send_task。",
+          "没有 startup publish_queued_tasks。"
+        ],
+        refs: ["src/server/runner.py:69", "src/server/runner.py:93"]
+      },
+      candidate: {
+        title: "Discovery Candidate Gate",
+        summary: "决定 product discovery 是否能为某个 Marc instance 创建 PM task。",
+        bullets: [
+          "只选择 active Marc instance。",
+          "如果同一 agent_instance 有 pm queued/running，则阻止本轮 discovery。",
+          "failed、waiting_for_review、merged、closed 不阻止新 discovery。"
+        ],
+        refs: ["src/server/postgres/repositories.py:120"]
+      },
+      dispatch: {
+        title: "Celery send_task",
+        summary: "把 task_id 发送到 broker，worker 后续再从 DB 读完整业务状态。",
+        bullets: [
+          "Celery kwargs 只携带 task_id。",
+          "queue 使用 settings.celery_queue。",
+          "Celery task_id 也设置为业务 task_id。"
+        ],
+        refs: ["src/server/runner.py:160"]
+      },
+      "publish-fail": {
+        title: "Publish Failed",
+        summary: "broker 未收到消息时，不允许 DB 永久停在 queued。",
+        bullets: [
+          "runner._dispatch_or_fail 捕获 send_task 异常。",
+          "TaskRepository.set_failed 记录 Dispatch failed。",
+          "PM task 会同步 set_failed 对应 ProposalPlanningRun。",
+          "API 调用方收到 503。"
+        ],
+        refs: ["src/server/runner.py:93", "src/server/runner.py:113"]
+      },
+      queued: {
+        title: "DB status: queued",
+        summary: "queued 是发布前后的短暂业务状态，不再由 FastAPI startup 扫描恢复。",
+        bullets: [
+          "send_task 成功后，worker 消费时会抢占 queued。",
+          "send_task 失败时会变 failed。",
+          "历史 stuck queued 需要手动修正为 failed。"
+        ],
+        refs: ["src/server/postgres/models.py:315", "src/server/runner.py:69"]
+      },
+      broker: {
+        title: "Redis Broker",
+        summary: "Celery late ack 后，worker 完成前消息不会 ack，worker 丢失时由 broker redelivery。",
+        bullets: [
+          "task_acks_late = true。",
+          "task_reject_on_worker_lost = true。",
+          "visibility timeout 控制 Redis unacked 恢复窗口。"
+        ],
+        refs: ["src/server/celery/app.py:20"]
+      },
+      "celery-task": {
+        title: "run_agent_task",
+        summary: "Celery task 是 execution 的薄 wrapper，只负责解析 task_id 和 redelivered。",
+        bullets: [
+          "bind=True 后可读取 self.request.delivery_info。",
+          "redelivered 传入 execute_agent_task 的 allow_running。",
+          "旧 broker message 多余 kwargs 会被忽略。"
+        ],
+        refs: ["src/server/celery/tasks.py:12", "src/server/celery/tasks.py:23"]
+      },
+      "load-task": {
+        title: "Load Task",
+        summary: "execution.py 按 task_id 读取 DB 状态，并用状态决定是否继续。",
+        bullets: [
+          "DB 是业务状态来源。",
+          "broker payload 不承载 checkpoint、repo、project。",
+          "非 queued/running 的消息都视为 stale。"
+        ],
+        refs: ["src/server/celery/execution.py:60", "src/server/celery/execution.py:138"]
+      },
+      duplicate: {
+        title: "running + not redelivered",
+        summary: "这是普通重复 broker delivery，不是 worker-loss 恢复。",
+        bullets: [
+          "直接 return。",
+          "Celery 会 ack 当前这条重复消息。",
+          "不会改变 DB task 的 running 状态。"
+        ],
+        refs: ["src/server/celery/execution.py:131"]
+      },
+      stale: {
+        title: "stale status",
+        summary: "已完成或已失败的 task 收到 broker message 时，应当跳过。",
+        bullets: [
+          "status 不在 queued/running 即 stale。",
+          "return 后 ack 当前消息。",
+          "避免重新执行已完成业务。"
+        ],
+        refs: ["src/server/celery/execution.py:138"]
+      },
+      "set-running": {
+        title: "Atomic set_running",
+        summary: "worker 对 queued task 做原子抢占，防止重复 worker 同时执行。",
+        bullets: [
+          "普通 delivery 只能 queued -> running。",
+          "redelivery 可接受 already running。",
+          "started_at 只在首次开始时写入。"
+        ],
+        refs: ["src/server/postgres/repositories.py:1057", "src/server/celery/execution.py:675"]
+      },
+      checkpoint: {
+        title: "Checkpoint Gate",
+        summary: "checkpoint 是 worker 丢失后判断继续或跳过的核心。",
+        bullets: [
+          "SAVE_CHECKPOINT 持久化最新安全 replay boundary。",
+          "final assistant turn 表示该 prompt 已完成。",
+          "PM 和小任务会避免重复执行已完成 prompt。"
+        ],
+        refs: ["src/server/celery/execution.py:491", "src/server/celery/execution.py:315", "src/server/celery/execution.py:424"]
+      },
+      "coding-flow": {
+        title: "Coding Workflow",
+        summary: "coding task 会优先处理 GitHub feedback 和 work item，再执行普通 task prompt。",
+        bullets: [
+          "feedback prompt 如果 checkpoint 已完成，则直接标记 feedback processed。",
+          "没有 work item 且 checkpoint 已完成，则不 rerun agent。",
+          "执行完后恢复 waiting state。"
+        ],
+        refs: ["src/server/celery/execution.py:241", "src/server/celery/execution.py:315"]
+      },
+      "pm-flow": {
+        title: "PM Workflow",
+        summary: "PM task 由 Marc 生成 proposal 或 planning 输出，完成后进入 waiting_for_review。",
+        bullets: [
+          "如果 checkpoint 已完成，直接从 checkpoint result 标记 waiting_for_review。",
+          "否则运行 Marc agent。",
+          "proposal planning run 会随 task 状态同步。"
+        ],
+        refs: ["src/server/celery/execution.py:396", "src/server/celery/execution.py:424"]
+      },
+      "final-state": {
+        title: "Final DB State",
+        summary: "最终状态必须可观察，并且不能让 active gate 永久卡住。",
+        bullets: [
+          "成功待审：waiting_for_review。",
+          "发布或执行失败：failed。",
+          "proposal source PM task 可进入 merged/closed。"
+        ],
+        refs: ["src/server/postgres/repositories.py:1184"]
+      }
+    };
+
+    const scenarios = [
+      {
+        id: "normal-task",
+        label: "普通 task 成功",
+        nodes: ["task-api", "runner", "queued", "dispatch", "broker", "celery-task", "load-task", "set-running", "checkpoint", "coding-flow", "final-state"],
+        edges: ["entry-runner", "dispatch-broker"],
+        focus: "runner",
+        timeline: [
+          "API 校验 agent instance ownership。",
+          "Runner 创建 queued task 并 commit。",
+          "send_task 成功进入 broker。",
+          "worker 抢占 queued -> running。",
+          "agent 根据 checkpoint/work item 执行并写最终状态。"
+        ]
+      },
+      {
+        id: "discovery",
+        label: "Product discovery",
+        nodes: ["discovery", "candidate", "runner", "queued", "dispatch", "broker", "celery-task", "set-running", "checkpoint", "pm-flow", "final-state"],
+        edges: ["candidate-runner", "dispatch-broker"],
+        focus: "candidate",
+        timeline: [
+          "poller 查询 active Marc instance。",
+          "过滤掉已有 pm queued/running 的 instance。",
+          "eligible instance 通过 submit_task 创建 PM discovery task。",
+          "publish 成功后交给 worker 执行。",
+          "PM 输出进入 waiting_for_review。"
+        ]
+      },
+      {
+        id: "proposal-planning",
+        label: "Proposal planning",
+        nodes: ["proposal", "runner", "queued", "dispatch", "broker", "celery-task", "set-running", "checkpoint", "pm-flow", "final-state"],
+        edges: ["entry-runner", "dispatch-broker"],
+        focus: "proposal",
+        timeline: [
+          "proposal 状态改为 approved。",
+          "创建 Marc planning task 和 ProposalPlanningRun。",
+          "commit 后立即 dispatch_planning_task。",
+          "worker 执行 Marc planning。",
+          "task 和 planning run 同步完成或失败。"
+        ]
+      },
+      {
+        id: "publish-failure",
+        label: "Broker publish 失败",
+        nodes: ["task-api", "proposal", "runner", "queued", "dispatch", "publish-fail", "final-state"],
+        edges: ["entry-runner"],
+        focus: "publish-fail",
+        timeline: [
+          "DB task 已创建为 queued。",
+          "send_task 抛异常或 dispatch 不成立。",
+          "runner 标记 task failed。",
+          "如果是 PM planning，同步标记 ProposalPlanningRun failed。",
+          "API 返回 503，不留下永久 queued。"
+        ]
+      },
+      {
+        id: "worker-redelivery",
+        label: "Worker 丢失 redelivery",
+        nodes: ["broker", "celery-task", "load-task", "set-running", "checkpoint", "coding-flow", "pm-flow", "final-state"],
+        edges: ["dispatch-broker"],
+        focus: "checkpoint",
+        timeline: [
+          "worker 已接收消息但未 ack。",
+          "worker 丢失后 Celery/Redis redeliver unacked message。",
+          "delivery_info.redelivered = true。",
+          "execution 允许 running task 继续。",
+          "checkpoint 决定继续运行或跳过已完成 prompt。"
+        ]
+      },
+      {
+        id: "duplicate",
+        label: "重复 delivery 跳过",
+        nodes: ["broker", "celery-task", "load-task", "duplicate"],
+        edges: ["dispatch-broker"],
+        focus: "duplicate",
+        timeline: [
+          "重复 broker message 到达 worker。",
+          "DB task 已经是 running。",
+          "delivery_info.redelivered 不是 true。",
+          "execution 直接 return。",
+          "Celery ack 当前重复消息，DB task 不变。"
+        ]
+      }
+    ];
+
+    const scenarioList = document.getElementById("scenarioList");
+    const detailTitle = document.getElementById("detailTitle");
+    const detailSummary = document.getElementById("detailSummary");
+    const detailList = document.getElementById("detailList");
+    const codeRefs = document.getElementById("codeRefs");
+    const timeline = document.getElementById("timeline");
+
+    let selectedScenario = scenarios[0];
+    let selectedNodeId = selectedScenario.focus;
+
+    function renderScenarioButtons() {
+      scenarioList.innerHTML = "";
+      scenarios.forEach((scenario) => {
+        const button = document.createElement("button");
+        button.className = "scenario-button";
+        button.type = "button";
+        button.textContent = scenario.label;
+        button.dataset.scenario = scenario.id;
+        if (scenario.id === selectedScenario.id) {
+          button.classList.add("active");
+        }
+        button.addEventListener("click", () => {
+          selectedScenario = scenario;
+          selectedNodeId = scenario.focus;
+          render();
+        });
+        scenarioList.appendChild(button);
+      });
+    }
+
+    function renderHighlights() {
+      document.querySelectorAll("[data-node]").forEach((node) => {
+        const id = node.dataset.node;
+        node.classList.toggle("path", selectedScenario.nodes.includes(id));
+        node.classList.toggle("active", id === selectedNodeId);
+      });
+      document.querySelectorAll("[data-edge]").forEach((edge) => {
+        edge.classList.toggle("path", selectedScenario.edges.includes(edge.dataset.edge));
+      });
+    }
+
+    function renderDetails() {
+      const detail = nodes[selectedNodeId] || nodes[selectedScenario.focus];
+      detailTitle.textContent = detail.title;
+      detailSummary.textContent = detail.summary;
+      detailList.innerHTML = "";
+      detail.bullets.forEach((item) => {
+        const li = document.createElement("li");
+        li.innerHTML = item;
+        detailList.appendChild(li);
+      });
+      codeRefs.innerHTML = "";
+      detail.refs.forEach((ref) => {
+        const code = document.createElement("code");
+        code.className = "code-ref";
+        code.textContent = ref;
+        codeRefs.appendChild(code);
+      });
+    }
+
+    function renderTimeline() {
+      timeline.innerHTML = "";
+      selectedScenario.timeline.forEach((item, index) => {
+        const row = document.createElement("div");
+        row.className = "timeline-step";
+        const marker = document.createElement("span");
+        marker.className = "step-index";
+        marker.textContent = String(index + 1);
+        const text = document.createElement("span");
+        text.textContent = item;
+        row.append(marker, text);
+        timeline.appendChild(row);
+      });
+    }
+
+    function render() {
+      renderScenarioButtons();
+      renderHighlights();
+      renderDetails();
+      renderTimeline();
+    }
+
+    document.querySelectorAll("[data-node]").forEach((node) => {
+      node.addEventListener("click", () => {
+        selectedNodeId = node.dataset.node;
+        render();
+      });
+    });
+
+    render();
+  </script>
+</body>
+</html>

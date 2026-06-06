@@ -8,19 +8,23 @@ from src.server.celery.app import celery_app
 from src.server.celery.execution import execute_agent_task
 
 
-@celery_app.task(name="nexus.execute_agent_task")
+@celery_app.task(bind=True, name="nexus.execute_agent_task")
 def run_agent_task(
+    self,
     task_id: str,
-    recovered: bool = False,
-    dispatch_token: str | None = None,
+    **legacy_kwargs: object,
 ) -> None:
     """Run an agent task from Celery."""
+    # Accept ignored kwargs so older queued messages can still deserialize after
+    # the worker has been upgraded.
+    del legacy_kwargs
     try:
+        delivery_info = getattr(self.request, "delivery_info", {}) or {}
+        redelivered = bool(delivery_info.get("redelivered"))
         asyncio.run(
             execute_agent_task(
                 task_id=uuid.UUID(task_id),
-                recovered=recovered,
-                dispatch_token=dispatch_token,
+                allow_running=redelivered,
             )
         )
     except Exception as exc:

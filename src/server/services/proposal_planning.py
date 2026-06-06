@@ -96,11 +96,7 @@ async def start_proposal_planning(
         task_id=planning_task.id,
     )
     await session.commit()
-    await runner.dispatch_existing_task(
-        planning_task.id,
-        recovered=False,
-        fail_task_on_dispatch_error=True,
-    )
+    await runner.dispatch_planning_task(planning_task.id)
     refreshed_proposal = await ProductProposalRepository.get(session, proposal.id)
     if refreshed_proposal is None:
         raise ProposalNotFoundAfterPlanningStartError

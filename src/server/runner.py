@@ -1,6 +1,6 @@
 """Task dispatcher for executor worker.
 
-PostgreSQL is the source of truth, and runner recovers undispatched/orphaned tasks on startup.
+PostgreSQL stores business state; Celery owns worker delivery and redelivery.
 """
 
 from __future__ import annotations
@@ -23,6 +23,10 @@ from src.server.postgres.repositories import (
 from src.server.schemas import TaskCreateRequest
 
 
+class TaskDispatchError(RuntimeError):
+    """Raised when a task cannot be published to the Celery broker."""
+
+
 def _task_category_for_agent(agent: AgentName) -> TaskCategory:
     """Return the task category used for an agent."""
     if agent == AgentName.marc:
@@ -31,7 +35,7 @@ def _task_category_for_agent(agent: AgentName) -> TaskCategory:
 
 
 class AgentTaskRunner:
-    """Dispatches and recover persisted tasks to Celery workers."""
+    """Dispatch persisted tasks to Celery workers."""
 
     def __init__(
         self,
@@ -70,160 +74,52 @@ class AgentTaskRunner:
             await session.refresh(task)
         logger.info(f"Task `{task.id}` is queued.")
 
-        try:
-            dispatched = await self.dispatch_existing_task(
-                task.id,
-                recovered=False,
-                fail_task_on_dispatch_error=True,
-            )
-            if not dispatched:
-                raise RuntimeError(f"Task `{task.id}` is no longer dispatchable (status/lease changed).")
-            logger.info(f"Task `{task.id}` has been dispatched for worker.")
-        except Exception:
-            raise
+        await self._dispatch_or_fail(task.id)
+        logger.info(f"Task `{task.id}` has been dispatched for worker.")
 
         return task.id
-
-    async def recover_unfinished_tasks(self) -> int:
-        """Recover queued/running tasks whose dispatch lease is missing or expired.
-        Recover three types task - Queued tasks but not be submitted, Running task but not finalized
-        and Queued tasks submitted to worker but exceeds `celery_visibility_timeout_seconds`.
-
-        Returns:
-            count of recovering tasks successfully.
-        """
-
-        async with self._database.session() as session:
-            logger.info("Recovering unfinished tasks.")
-            recoverable_tasks = await TaskRepository.list_recoverable(
-                session,
-                limit=10000,
-            )
-
-        recovered_count = 0
-        for task in recoverable_tasks:
-            async with self._database.session() as session:
-                instance = await AgentInstanceRepository.get(session, task.agent_instance_id)
-                workspace = await WorkspaceRepository.get_by_agent_instance_id(session, task.agent_instance_id)
-
-            if instance is None or not instance.is_active:
-                logger.warning(
-                    "Recovery skipped for task %s because assigned agent instance %s is missing or inactive.",
-                    task.id,
-                    task.agent_instance_id,
-                )
-                continue
-
-            # recover from checkpoint for running tasks
-            # The worker now reads checkpoint/context from PostgreSQL by task_id instead of a synthetic payload.
-            previous_status = task.status
-            if previous_status == TaskStatus.running:
-                # Running + expired lease means the previous worker is considered orphaned.
-                async with self._database.session() as session:
-                    reset = await TaskRepository.set_queued(
-                        session,
-                        task.id,
-                        error="Recovered stale running task for redispatch after restart.",
-                    )
-                if reset is None:
-                    continue
-
-            # Recovery must preserve the repo/project snapshot captured when the task
-            # was created. Legacy rows may still need workspace fallback for one or
-            # both fields, so keep that compatibility path here.
-            resolved_repo = task.repo or (workspace.github_repo if workspace is not None else None)
-            resolved_project = task.project if task.project is not None else (
-                workspace.project if workspace is not None else None
-            )
-            if not resolved_repo or not resolved_project:
-                async with self._database.session() as session:
-                    await TaskRepository.set_failed(
-                        session,
-                        task.id,
-                        error="Recovery failed: task repo/project context is missing.",
-                    )
-                logger.warning("Failed to recover task %s because repo/project context is missing.", task.id)
-                continue
-
-            try:
-                dispatched = await self._dispatch(task.id, recovered=True)
-            except Exception as exc:
-                async with self._database.session() as session:
-                    await TaskRepository.set_queued(
-                        session,
-                        task.id,
-                        error=f"Recovery dispatch failed: {exc}",
-                    )
-                logger.exception("Failed to redispatch recovered task %s", task.id)
-                continue
-
-            if not dispatched:
-                # Another runner may have acquired the lease first.
-                logger.warning(
-                    "Failed to re-dispatch task %s for worker: another runner may have acquired the lease first.",
-                    task.id,
-                )
-                continue
-
-            recovered_count += 1
-
-            logger.info(
-                "%s task %s recovered and re-dispatched to Celery worker.",
-                "Stale running"
-                if previous_status == TaskStatus.running
-                else "Queued",
-                task.id,
-            )
-
-        if recovered_count:
-            logger.info("Recovered and dispatched %s unfinished tasks.", recovered_count)
-        else:
-            logger.warning("No task is recovered and dispatched.")
-
-        return recovered_count
 
     async def shutdown(self) -> None:
         """Shut down runner resources."""
         return None
 
-    async def dispatch_existing_task(
+    async def dispatch_planning_task(
         self,
         task_id: uuid.UUID,
-        *,
-        recovered: bool = False,
-        fail_task_on_dispatch_error: bool = False,
     ) -> bool:
-        """Dispatch an already persisted task."""
-        try:
-            dispatched = await self._dispatch(task_id, recovered=recovered)
-        except Exception as exc:
-            if fail_task_on_dispatch_error:
-                # New planning flows can opt in here so a dispatch failure is visible
-                # on both the task row and the linked planning run instead of leaving
-                # the approved proposal in an ambiguous in-between state.
-                async with self._database.session() as session:
-                    task = await TaskRepository.set_failed(session, task_id, error=f"Dispatch failed: {exc}")
-                    if task is not None and task.category == TaskCategory.pm:
-                        planning_run = await ProposalPlanningRunRepository.get_by_task_id(session, task_id)
-                        if planning_run is not None:
-                            await ProposalPlanningRunRepository.set_failed(
-                                session,
-                                planning_run.id,
-                                error=f"Dispatch failed: {exc}",
-                            )
-                logger.error(f"Fail to dispatch task `{task_id}`: {str(exc)}")
-            raise
+        """Dispatch a planning task created in a caller-owned transaction."""
+        return await self._dispatch_or_fail(task_id)
 
-        if not dispatched and fail_task_on_dispatch_error:
-            error = f"Dispatch failed: Task `{task_id}` is no longer dispatchable (status/lease changed)."
-            async with self._database.session() as session:
-                task = await TaskRepository.set_failed(session, task_id, error=error)
-                if task is not None and task.category == TaskCategory.pm:
-                    planning_run = await ProposalPlanningRunRepository.get_by_task_id(session, task_id)
-                    if planning_run is not None:
-                        await ProposalPlanningRunRepository.set_failed(session, planning_run.id, error=error)
+    async def _dispatch_or_fail(
+        self,
+        task_id: uuid.UUID,
+    ) -> bool:
+        """Dispatch a task and mark dispatch failure in PostgreSQL."""
+        try:
+            dispatched = await self._dispatch(task_id)
+        except Exception as exc:
+            error = f"Dispatch failed: {exc}"
+            await self._mark_dispatch_failed(task_id, error=error)
+            logger.error(f"Fail to dispatch task `{task_id}`: {str(exc)}")
+            raise TaskDispatchError(error) from exc
+
+        if not dispatched:
+            error = f"Dispatch failed: Task `{task_id}` is no longer queued for dispatch."
+            await self._mark_dispatch_failed(task_id, error=error)
             logger.error(error)
-        return dispatched
+            raise TaskDispatchError(error)
+        return True
+
+    async def _mark_dispatch_failed(self, task_id: uuid.UUID, *, error: str) -> None:
+        """Mark dispatch failure on the task and any linked planning run."""
+        async with self._database.session() as session:
+            task = await TaskRepository.set_failed(session, task_id, error=error)
+            if task is None or task.category != TaskCategory.pm:
+                return
+
+            planning_run = await ProposalPlanningRunRepository.get_by_task_id(session, task_id)
+            if planning_run is not None:
+                await ProposalPlanningRunRepository.set_failed(session, planning_run.id, error=error)
 
     async def dispatch_github_feedback(self, task_id: uuid.UUID) -> bool:
         """Dispatch a task created from GitHub feedback."""
@@ -233,7 +129,7 @@ class AgentTaskRunner:
             return False
 
         try:
-            dispatched = await self._dispatch(task_id, recovered=False)
+            dispatched = await self._dispatch(task_id)
         except Exception as exc:
             async with self._database.session() as session:
                 await TaskRepository.restore_github_feedback_dispatch(
@@ -288,20 +184,12 @@ class AgentTaskRunner:
         logger.info(f"Agent `{instance.agent.name}` has workspace `{workspace.workspace_key}`")
         return task
 
-    async def _dispatch(self, task_id: uuid.UUID, *, recovered: bool) -> bool:
-        """Acquire a dispatch lease then emit a Celery message.
-
-        PostgreSQL is the source of truth for lease ownership, so only one dispatcher can
-        actively send a broker message for a task at a time.
-        """
+    async def _dispatch(self, task_id: uuid.UUID) -> bool:
+        """Emit a Celery message for a queued task."""
         async with self._database.session() as session:
-            leased_task = await TaskRepository.mark_dispatched(
-                session,
-                task_id,
-                lease_seconds=self._settings.task_dispatch_lease_seconds,
-            )
+            task = await TaskRepository.get(session, task_id)
 
-        if leased_task is None or not leased_task.dispatch_token:
+        if task is None or task.status != TaskStatus.queued:
             logger.warning(f"Failed to dispatch task {task_id} to worker.")
             return False
 
@@ -309,10 +197,8 @@ class AgentTaskRunner:
             "nexus.execute_agent_task",
             kwargs={
                 "task_id": str(task_id),
-                "recovered": recovered,
-                # Worker must claim with the same token before it can flip queued -> running.
-                "dispatch_token": leased_task.dispatch_token,
             },
             queue=self._settings.celery_queue,
+            task_id=str(task_id),
         )
         return True

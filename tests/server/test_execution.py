@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -138,6 +139,58 @@ class FakeDatabase:
     async def __aexit__(self, *args):
         """Exit the async test context."""
         return None
+
+
+def test_execute_agent_task_skips_non_redelivered_running_duplicate(monkeypatch):
+    """Verify normal duplicate broker deliveries do not re-enter running tasks."""
+    task_id = uuid.uuid4()
+    databases = []
+
+    class RuntimeDatabase(FakeDatabase):
+        def __init__(self, database_url):
+            """Initialize runtime database test helper."""
+            super().__init__()
+            self.database_url = database_url
+            self.connected = False
+            self.disconnected = False
+            databases.append(self)
+
+        async def connect(self):
+            """Track database connection."""
+            self.connected = True
+
+        async def disconnect(self):
+            """Track database disconnection."""
+            self.disconnected = True
+
+    async def fake_load_task(database, requested_task_id):
+        """Return an already-running task."""
+        assert requested_task_id == task_id
+        return make_task(id=task_id, status=TaskStatus.running)
+
+    async def fail_if_called(*args, **kwargs):
+        """Fail if duplicate delivery reaches execution setup."""
+        raise AssertionError("duplicate running delivery should be skipped")
+
+    monkeypatch.setattr(execution, "Database", RuntimeDatabase)
+    monkeypatch.setattr(execution, "_load_task", fake_load_task)
+    monkeypatch.setattr(execution, "_load_binding", fail_if_called)
+    monkeypatch.setattr(execution, "_mark_workspace_running", fail_if_called)
+    monkeypatch.setattr(execution, "_mark_task_running", fail_if_called)
+    monkeypatch.setattr(execution, "_run_agent_workflow", fail_if_called)
+    monkeypatch.setattr(execution, "_mark_failed", fail_if_called)
+
+    asyncio.run(
+        execution.execute_agent_task(
+            task_id=task_id,
+            settings=SimpleNamespace(database_url="postgresql://test"),
+            allow_running=False,
+        )
+    )
+
+    assert len(databases) == 1
+    assert databases[0].connected is True
+    assert databases[0].disconnected is True
 
 
 def test_load_binding_prefers_task_snapshot_over_workspace_context(monkeypatch):
@@ -330,7 +383,6 @@ def test_run_code_agent_workflow_small_task_passthrough(monkeypatch):
             user_id="user-id",
             workspace_key="workspace",
             github_repo="owner/repo",
-            recovered=False,
         )
     )
 
@@ -338,6 +390,58 @@ def test_run_code_agent_workflow_small_task_passthrough(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["question"] == "do the task"
     assert calls[0]["checkpoint"] == []
+    assert fake_agent.enter_count == 1
+    assert fake_agent.close_count == 1
+
+
+def test_run_code_agent_workflow_skips_completed_checkpoint_without_work_items(monkeypatch):
+    """Verify completed small-task checkpoints are not executed twice."""
+    task = make_task(
+        checkpoint=[
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "do the task"},
+            {"role": "assistant", "content": "final answer"},
+        ]
+    )
+    fake_agent = FakeAgent()
+
+    async def no_work_items(session, task_id):
+        """Return no work items."""
+        return []
+
+    async def latest_checkpoint(database, task_id):
+        """Return task checkpoint."""
+        assert task_id == task.id
+        return task.checkpoint or []
+
+    async def no_pending_feedback(database, task_id, *, limit):
+        """Return no pending feedback."""
+        assert task_id == task.id
+        return []
+
+    async def fail_run_agent(**kwargs):
+        """Fail if the agent is rerun."""
+        raise AssertionError("completed checkpoint should not rerun the agent")
+
+    monkeypatch.setattr(TaskWorkItemRepository, "list_by_task", no_work_items)
+    monkeypatch.setattr(execution, "_build_agent", lambda **_: fake_agent)
+    monkeypatch.setattr(execution, "_run_agent", fail_run_agent)
+    monkeypatch.setattr(execution, "_get_latest_checkpoint", latest_checkpoint)
+    monkeypatch.setattr(execution, "_claim_pending_github_feedback", no_pending_feedback)
+
+    result = asyncio.run(
+        execution._run_code_agent_workflow(
+            database=FakeDatabase(),
+            task=task,
+            on_progress=None,
+            settings=SimpleNamespace(),
+            user_id="user-id",
+            workspace_key="workspace",
+            github_repo="owner/repo",
+        )
+    )
+
+    assert result is None
     assert fake_agent.enter_count == 1
     assert fake_agent.close_count == 1
 
@@ -425,7 +529,6 @@ def test_run_agent_workflow_pauses_when_work_item_is_ready(monkeypatch):
             user_id="user-id",
             workspace_key="workspace",
             github_repo="owner/repo",
-            recovered=False,
         )
     )
 
@@ -548,7 +651,6 @@ def test_run_agent_workflow_keeps_checkpoint_between_work_items(monkeypatch):
             user_id="user-id",
             workspace_key="workspace",
             github_repo="owner/repo",
-            recovered=False,
         )
     )
 
@@ -618,7 +720,6 @@ def test_run_agent_workflow_waits_when_all_work_items_review_ready(monkeypatch):
             user_id="user-id",
             workspace_key="workspace",
             github_repo="owner/repo",
-            recovered=False,
         )
     )
 
@@ -687,7 +788,6 @@ def test_run_agent_workflow_processes_github_feedback_from_checkpoint(monkeypatc
             user_id="user-id",
             workspace_key="workspace",
             github_repo="owner/repo",
-            recovered=False,
         )
     )
 
@@ -703,6 +803,128 @@ def test_run_agent_workflow_processes_github_feedback_from_checkpoint(monkeypatc
         "<agent-system-reminder>The following feedback was sent from GitHub by `reviewer` "
         "as `pr_review_comment`.</agent-system-reminder>Please rename this variable."
     ) in captured["run"]["question"]
+    assert fake_agent.enter_count == 1
+    assert fake_agent.close_count == 1
+
+
+def test_run_agent_workflow_marks_completed_github_feedback_from_checkpoint(monkeypatch):
+    """Verify completed feedback checkpoints do not rerun feedback."""
+    task = make_task(checkpoint=[])
+    feedback_items = [
+        SimpleNamespace(
+            id="feedback-1",
+            pull_request_number=17,
+            kind=GithubPullRequestFeedbackKind.pr_comment,
+            external_id=902,
+            author="reviewer",
+            body="Looks good after the rename.",
+            review_state=None,
+            file_path=None,
+            line=None,
+            html_url="https://github.com/owner/repo/pull/17#issuecomment-902",
+        )
+    ]
+    feedback_prompt = execution._build_github_feedback_prompt(task, feedback_items)
+    task.checkpoint = [
+        {"role": "system", "content": "checkpoint system"},
+        {"role": "user", "content": feedback_prompt},
+        {"role": "assistant", "content": "Feedback handled."},
+    ]
+    fake_agent = FakeAgent()
+    captured = {}
+
+    async def claim_feedback(database, task_id, *, limit):
+        """Support claim feedback tests."""
+        assert task_id == task.id
+        return feedback_items
+
+    async def mark_processed(database, claimed_items):
+        """Capture processed feedback."""
+        captured["processed"] = claimed_items
+
+    async def latest_checkpoint(database, task_id):
+        """Return task checkpoint."""
+        assert task_id == task.id
+        return task.checkpoint or []
+
+    async def fail_run_agent(**kwargs):
+        """Fail if feedback is rerun."""
+        raise AssertionError("completed feedback checkpoint should not rerun the agent")
+
+    monkeypatch.setattr(execution, "_claim_pending_github_feedback", claim_feedback)
+    monkeypatch.setattr(execution, "_mark_github_feedback_processed", mark_processed)
+    monkeypatch.setattr(execution, "_get_latest_checkpoint", latest_checkpoint)
+    monkeypatch.setattr(execution, "_build_agent", lambda **_: fake_agent)
+    monkeypatch.setattr(execution, "_run_agent", fail_run_agent)
+
+    result = asyncio.run(
+        execution._run_code_agent_workflow(
+            database=FakeDatabase(),
+            task=task,
+            on_progress=None,
+            settings=SimpleNamespace(github_feedback_batch_size=5),
+            user_id="user-id",
+            workspace_key="workspace",
+            github_repo="owner/repo",
+        )
+    )
+
+    assert result is None
+    assert captured["processed"] == feedback_items
+    assert fake_agent.enter_count == 1
+    assert fake_agent.close_count == 1
+
+
+def test_run_pm_agent_workflow_completes_from_checkpoint(monkeypatch):
+    """Verify PM recovery completes from a final checkpoint."""
+    task = make_task(
+        agent=SimpleNamespace(value="marc"),
+        category=TaskCategory.pm,
+        checkpoint=[
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "plan proposal"},
+            {"role": "assistant", "content": "proposal plan ready"},
+        ],
+    )
+    fake_agent = FakeAgent()
+    captured = {}
+
+    async def latest_checkpoint(database, task_id):
+        """Return task checkpoint."""
+        assert task_id == task.id
+        return task.checkpoint or []
+
+    async def mark_waiting(database, task_id, result):
+        """Capture waiting state."""
+        captured["task_id"] = task_id
+        captured["result"] = result
+
+    async def fail_run_agent(**kwargs):
+        """Fail if the PM agent reruns."""
+        raise AssertionError("completed PM checkpoint should not rerun the agent")
+
+    monkeypatch.setattr(execution, "_build_agent", lambda **_: fake_agent)
+    monkeypatch.setattr(execution, "_get_latest_checkpoint", latest_checkpoint)
+    monkeypatch.setattr(execution, "_mark_waiting_for_review", mark_waiting)
+    monkeypatch.setattr(execution, "_run_agent", fail_run_agent)
+
+    result = asyncio.run(
+        execution._run_pm_agent_workflow(
+            database=FakeDatabase(),
+            task=task,
+            on_progress=None,
+            settings=SimpleNamespace(),
+            user_id="user-id",
+            workspace_key="workspace",
+            github_repo="owner/repo",
+        )
+    )
+
+    assert result is None
+    assert captured == {
+        "task_id": task.id,
+        "result": "proposal plan ready",
+    }
     assert fake_agent.enter_count == 1
     assert fake_agent.close_count == 1
 

@@ -16,12 +16,11 @@ celery_app = Celery(
 
 celery_app.conf.update(
     task_default_queue=settings.celery_queue,
-    # Agentic coding has non-idempotent side effects (git push, PR comments, etc.).
-    # Ack early to avoid duplicate re-execution after worker loss.
-    task_acks_late=False,
-    # Keep lost-worker tasks from being force-requeued by broker semantics.
-    task_reject_on_worker_lost=False,
-    # Explicitly keep default failure/timeout ack behavior.
+    # Agent execution is resumed from PostgreSQL checkpoints. Let Celery keep the
+    # message unacked until the worker finishes so worker loss is redelivered.
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    # Keep normal Python failures terminal instead of creating a redelivery loop.
     task_acks_on_failure_or_timeout=True,
     task_track_started=True,
     worker_prefetch_multiplier=1,
@@ -35,6 +34,13 @@ celery_app.conf.update(
         "socket_connect_timeout": broker_timeout,
         "socket_timeout": broker_timeout,
     },
+    result_backend_transport_options={
+        "visibility_timeout": settings.celery_visibility_timeout_seconds,
+        "retry_policy": {
+            "timeout": broker_timeout,
+        },
+    },
+    visibility_timeout=settings.celery_visibility_timeout_seconds,
     # Redis-specific Celery aliases cover both broker/backend Redis clients.
     redis_socket_connect_timeout=broker_timeout,
     redis_socket_timeout=broker_timeout,

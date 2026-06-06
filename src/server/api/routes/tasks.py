@@ -23,7 +23,7 @@ from src.server.postgres.repositories import (
     TaskWorkItemRepository,
     WorkspaceRepository,
 )
-from src.server.runner import AgentTaskRunner
+from src.server.runner import AgentTaskRunner, TaskDispatchError
 from src.server.schemas import (
     TaskConsultRequest,
     TaskConsultResponse,
@@ -71,6 +71,8 @@ async def create_task(
         task_id = await runner.submit_task(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except TaskDispatchError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     async with database.session() as session:
         task = await TaskRepository.get(session, task_id)

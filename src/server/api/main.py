@@ -5,7 +5,6 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 
-from src.logger import logger
 from src.server.api.routes import agent_instances_router, auth_router, product_router, tasks_router
 from src.server.config import get_settings
 from src.server.github_feedback import GithubFeedbackPoller
@@ -57,9 +56,6 @@ async def lifespan(app: FastAPI):
     app.state.product_discovery_poller = product_discovery_poller
     app.state.product_workflow_poller = product_workflow_poller
 
-    recovered_count = await runner.recover_unfinished_tasks()
-    if recovered_count:
-        logger.warning("Startup recovery scheduled %s unfinished tasks.", recovered_count)
     github_feedback_poller.start()
     product_discovery_poller.start()
     product_workflow_poller.start()

@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import uuid
 from decimal import Decimal
-from datetime import datetime, timedelta, timezone
-from typing import Any, cast
+from datetime import datetime, timezone
+from typing import Any
 
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
 from sqlalchemy import and_, func, or_, select, update
-from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1055,111 +1054,34 @@ class TaskRepository:
         return list(result.scalars().all())
 
     @staticmethod
-    async def list_recoverable(
-        session: AsyncSession,
-        *,
-        limit: int = 1000,
-    ) -> list[TaskRecord]:
-        """Return queued/running tasks whose dispatch lease is missing or expired.
-        Recoverable task is three types - Queued tasks but not be submitted, Running task but not finalized
-        and Queued tasks submitted to worker but exceeds `celery_visibility_timeout_seconds`.
-        """
-        now = utc_now()
-
-        lease_missing_or_expired = (
-            TaskRecord.dispatch_token.is_(None)
-            | TaskRecord.lease_expires_at.is_(None)
-            | (TaskRecord.lease_expires_at <= now)
-        )
-        queued_recoverable = and_(
-            TaskRecord.status == TaskStatus.queued,
-            lease_missing_or_expired,
-        )
-        running_recoverable = and_(
-            TaskRecord.status == TaskStatus.running,
-            lease_missing_or_expired,
-        )
-
-        query = (
-            select(TaskRecord)
-            .where(or_(queued_recoverable, running_recoverable))
-            .order_by(TaskRecord.created_at.asc())
-            .limit(limit)
-        )
-        result = await session.execute(query)
-        return list(result.scalars().all())
-
-    @staticmethod
-    async def mark_dispatched(
+    async def set_running(
         session: AsyncSession,
         task_id: uuid.UUID,
         *,
-        lease_seconds: int,
+        expected_agent_instance_id: uuid.UUID,
+        allow_running: bool = False,
     ) -> TaskRecord | None:
-        """Acquire a dispatch lease before send_task.
-
-        This is a compare-and-set update in PostgreSQL to prevent duplicate dispatches
-        from concurrent runner instances.
-        """
+        """Atomically mark a queued or redelivered running task as running."""
         now = utc_now()
-        lease_ttl = max(1, lease_seconds)
-        token = str(uuid.uuid4())
+        status_condition = TaskRecord.status == TaskStatus.queued
+        if allow_running:
+            status_condition = TaskRecord.status.in_([TaskStatus.queued, TaskStatus.running])
 
         stmt = (
             update(TaskRecord)
             .where(
                 TaskRecord.id == task_id,
-                TaskRecord.status == TaskStatus.queued,
-                or_(
-                    TaskRecord.dispatch_token.is_(None),
-                    TaskRecord.lease_expires_at.is_(None),
-                    TaskRecord.lease_expires_at <= now,
-                ),
+                TaskRecord.agent_instance_id == expected_agent_instance_id,
+                status_condition,
             )
-            .values(
-                dispatch_token=token,
-                lease_expires_at=now + timedelta(seconds=lease_ttl),
-                updated_at=now,
-            )
-            .returning(TaskRecord)
-        )
-
-        result = await session.execute(stmt)
-        task = result.scalar_one_or_none()
-        if task is None:
-            await session.rollback()
-            return None
-
-        await session.commit()
-        return task
-    
-    @staticmethod
-    async def claim_dispatched_running(
-        session: AsyncSession,
-        task_id: uuid.UUID,
-        *,
-        dispatch_token: str,
-        lease_seconds: int,
-        expected_agent_instance_id: uuid.UUID,
-    ) -> TaskRecord | None:
-        """Worker-side claim: queued -> running only when dispatch_token matches current lease."""
-        now = utc_now()
-
-        where_conditions: list[Any] = [
-            TaskRecord.id == task_id,
-            TaskRecord.status == TaskStatus.queued,
-            TaskRecord.dispatch_token == dispatch_token,
-            TaskRecord.agent_instance_id == expected_agent_instance_id,
-        ]
-
-        stmt = (
-            update(TaskRecord)
-            .where(*where_conditions)
             .values(
                 status=TaskStatus.running,
-                started_at=now,
+                error=None,
+                finished_at=None,
+                dispatch_token=None,
+                lease_expires_at=None,
+                started_at=func.coalesce(TaskRecord.started_at, now),
                 updated_at=now,
-                lease_expires_at=now + timedelta(seconds=max(1, lease_seconds)),
             )
             .returning(TaskRecord)
         )
@@ -1176,46 +1098,7 @@ class TaskRepository:
             return None
 
         return task
-    
-    @staticmethod
-    async def extend_lease(
-        session: AsyncSession,
-        task_id: uuid.UUID,
-        *,
-        dispatch_token: str,
-        lease_seconds: int,
-        require_running: bool = True,
-    ) -> bool:
-        """Heartbeat lease extension.
 
-        Recovery only touches tasks with expired leases, so active workers periodically extend this value.
-        """
-        now = utc_now()
-
-        where_conditions: list[Any] = [
-            TaskRecord.id == task_id,
-            TaskRecord.dispatch_token == dispatch_token,
-        ]
-        if require_running:
-            where_conditions.append(TaskRecord.status == TaskStatus.running)
-
-        stmt = (
-            update(TaskRecord)
-            .where(*where_conditions)
-            .values(
-                lease_expires_at=now + timedelta(seconds=max(1, lease_seconds)),
-                updated_at=now,
-            )
-        )
-
-        result: CursorResult[Any] = cast(CursorResult[Any], await session.execute(stmt))
-        if result.rowcount == 0:
-            await session.rollback()
-            return False
-
-        await session.commit()
-        return True
-    
     @staticmethod
     async def update_checkpoint(
         session: AsyncSession,
@@ -1792,12 +1675,17 @@ class GithubPullRequestFeedbackRepository:
         *,
         limit: int = 20,
     ) -> list[GithubPullRequestFeedbackRecord]:
-        """Claim pending feedback for a task."""
+        """Claim pending or worker-lost processing feedback for a task."""
         query = (
             select(GithubPullRequestFeedbackRecord)
             .where(
                 GithubPullRequestFeedbackRecord.task_id == task_id,
-                GithubPullRequestFeedbackRecord.status == GithubPullRequestFeedbackStatus.pending,
+                GithubPullRequestFeedbackRecord.status.in_(
+                    [
+                        GithubPullRequestFeedbackStatus.pending,
+                        GithubPullRequestFeedbackStatus.processing,
+                    ]
+                ),
             )
             .order_by(
                 GithubPullRequestFeedbackRecord.external_created_at.asc(),

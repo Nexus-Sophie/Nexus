@@ -24,10 +24,6 @@ class FakePoller:
 
 
 class FakeRunner:
-    async def recover_unfinished_tasks(self):
-        """Return recovered task count."""
-        return 0
-
     async def shutdown(self):
         """Shut down a fake service."""
         return None

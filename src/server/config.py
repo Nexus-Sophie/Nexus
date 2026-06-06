@@ -27,7 +27,6 @@ class Settings:
     celery_visibility_timeout_seconds: int
     celery_task_publish_max_retries: int
     celery_broker_connection_timeout_seconds: float
-    task_dispatch_lease_seconds: int
     github_feedback_poll_interval_seconds: int
     github_feedback_poll_task_limit: int
     github_feedback_batch_size: int
@@ -84,9 +83,6 @@ def get_settings() -> Settings:
         ),
         celery_broker_connection_timeout_seconds=float(
             os.getenv("NEXUS_CELERY_BROKER_CONNECTION_TIMEOUT_SECONDS", "2.0"),
-        ),
-        task_dispatch_lease_seconds=int(
-            os.getenv("NEXUS_TASK_DISPATCH_LEASE_SECONDS", "60"),
         ),
         github_feedback_poll_interval_seconds=int(
             os.getenv("NEXUS_GITHUB_FEEDBACK_POLL_INTERVAL_SECONDS", "60"),

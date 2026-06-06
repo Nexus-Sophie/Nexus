@@ -5,6 +5,7 @@ import sys
 import types
 import uuid
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -27,9 +28,27 @@ fake_celery_module = types.ModuleType("celery")
 fake_celery_module.Celery = _FakeCelery
 sys.modules.setdefault("celery", fake_celery_module)
 
-from src.server.postgres.models import AgentName, TaskCategory
+from src.server.postgres.models import AgentName, TaskCategory, TaskStatus
 from src.server.postgres.repositories import AgentInstanceRepository, TaskRepository, WorkspaceRepository
-from src.server.runner import AgentTaskRunner
+from src.server.runner import AgentTaskRunner, TaskDispatchError
+
+
+class FakeDatabase:
+    def __init__(self) -> None:
+        """Initialize the test helper."""
+        self._session = object()
+
+    def session(self):
+        """Return a fake database session."""
+        return self
+
+    async def __aenter__(self):
+        """Enter the fake database session."""
+        return self._session
+
+    async def __aexit__(self, *args) -> None:
+        """Exit the fake database session."""
+        return None
 
 
 def test_create_task_record_snapshots_workspace_repo_project(monkeypatch) -> None:
@@ -141,3 +160,41 @@ def test_create_task_record_requires_workspace_repo_and_project(
 
     with pytest.raises(ValueError, match="workspace repo and project are required for task submission"):
         asyncio.run(runner._create_task_record(object(), request))
+
+
+def test_dispatch_or_fail_marks_task_failed_when_publish_raises(monkeypatch) -> None:
+    """Verify broker publish errors do not leave tasks queued."""
+    task_id = uuid.uuid4()
+    task = SimpleNamespace(id=task_id, status=TaskStatus.queued)
+    captured = {}
+
+    async def fake_get(session, requested_task_id):
+        """Return a queued task."""
+        assert requested_task_id == task_id
+        return task
+
+    def fail_send_task(*args, **kwargs):
+        """Simulate broker publish failure."""
+        raise RuntimeError("broker unavailable")
+
+    monkeypatch.setattr(TaskRepository, "get", fake_get)
+    monkeypatch.setattr("src.server.runner.celery_app.send_task", fail_send_task)
+
+    runner = AgentTaskRunner(
+        settings=SimpleNamespace(celery_queue="test-queue"),
+        database=FakeDatabase(),
+    )
+
+    async def fake_mark_dispatch_failed(requested_task_id, *, error):
+        """Capture dispatch failure state."""
+        captured["task_id"] = requested_task_id
+        captured["error"] = error
+
+    runner._mark_dispatch_failed = AsyncMock(side_effect=fake_mark_dispatch_failed)
+
+    with pytest.raises(TaskDispatchError, match="broker unavailable"):
+        asyncio.run(runner._dispatch_or_fail(task_id))
+
+    runner._mark_dispatch_failed.assert_awaited_once()
+    assert captured["task_id"] == task_id
+    assert "broker unavailable" in captured["error"]
