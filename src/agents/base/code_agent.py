@@ -8,6 +8,7 @@ from pydantic import ConfigDict
 
 from src.agents.base.agent import Agent
 from src.logger import logger
+from src.sandbox import Sandbox
 from src.utils.github import collect_github_response
 
 
@@ -36,6 +37,43 @@ class CodeAgent(Agent):
     FORK_READY_POLL_INTERVAL_SECONDS: ClassVar[float] = 1.0
     github_token: str | None = None
     github_repo: str | None = None  # owner/repo, e.g. "acme/nexus"
+
+    async def prepare_project_checkout(self, sandbox: Sandbox) -> tuple[str | None, str | None]:
+        """Clone or pull the assigned repository before the model starts working.
+
+        Returns:
+            The prepared fork repository and authenticated clone URL when a
+            GitHub token is available, otherwise ``(None, None)``.
+        """
+        if not self.github_repo:
+            return None, None
+
+        from src.tools.code.github.client import GithubTools
+        from src.tools.skills import project_path_for_repo
+
+        upstream_url = f"https://github.com/{self.github_repo}"
+        fork_repo: str | None = None
+        fork_clone_url: str | None = None
+        repo_url = upstream_url
+        fetch_upstream_url: str | None = None
+
+        if self.github_token:
+            fork_repo = await self._ensure_fork(self.github_token, self.github_repo)
+            fork_clone_url = f"https://x-access-token:{self.github_token}@github.com/{fork_repo}"
+            repo_url = fork_clone_url
+            fetch_upstream_url = upstream_url
+
+        result = await GithubTools(sandbox).fetch_from_github(
+            repo_url=repo_url,
+            local_path=project_path_for_repo(self.github_repo),
+            upstream_url=fetch_upstream_url,
+        )
+        if not result.get("success", False):
+            raise RuntimeError(
+                f"Failed to prepare repository {self.github_repo}: {result.get('message', 'git fetch failed')}"
+            )
+
+        return fork_repo, fork_clone_url
 
     @staticmethod
     def _github_headers(token: str) -> dict[str, str]:

@@ -144,6 +144,7 @@ async def run_code_agent_workflow(
         user_id=user_id,
         repo=repo,
         project=project,
+        agent_name=task.agent.value,
     )
     agent = agents.build_agent(
         task=task,
@@ -309,6 +310,7 @@ async def run_pm_agent_workflow(
         user_id=user_id,
         repo=repo,
         project=project,
+        agent_name=task.agent.value,
     )
     agent = agents.build_agent(
         task=task,

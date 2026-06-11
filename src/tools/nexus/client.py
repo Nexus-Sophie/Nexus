@@ -26,6 +26,7 @@ class NexusTaskContext:
     user_id: uuid.UUID
     repo: str
     project: str
+    agent_name: str | None = None
     current_work_item_id: uuid.UUID | None = None
 
     @property

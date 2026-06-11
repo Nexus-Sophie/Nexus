@@ -15,10 +15,22 @@ from src.sandbox import PYTHON_312
 
 def make_pool_manager(mock_sandbox):
     """Create a mocked sandbox pool manager."""
+    configure_empty_project_checkout(mock_sandbox)
     pool_manager = AsyncMock()
     pool_manager.acquire = AsyncMock(return_value=mock_sandbox)
     pool_manager.release = AsyncMock(return_value=None)
     return pool_manager
+
+
+def configure_empty_project_checkout(mock_sandbox):
+    """Configure a sandbox mock for a successful checkout without skills."""
+    mock_sandbox.recreate = AsyncMock()
+    mock_sandbox.run_shell = AsyncMock(side_effect=[
+        {"success": True, "stdout": "new", "stderr": ""},
+        {"success": True, "stdout": "", "stderr": ""},
+    ])
+    mock_sandbox.read_file = AsyncMock(return_value={"success": False, "content": None})
+    mock_sandbox.list_files = AsyncMock(return_value={"success": False, "files": []})
 
 
 class TestSophieCreation:
@@ -350,7 +362,6 @@ class TestSophieToolAccess:
                 async with sophie as s:
                     assert "WebFetch" in s.tool_kits
                     assert "web_search_agent" in s.tool_kits
-
 
 
 

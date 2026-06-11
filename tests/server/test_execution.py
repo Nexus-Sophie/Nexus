@@ -434,6 +434,7 @@ def test_run_code_agent_workflow_small_task_passthrough(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["question"] == "do the task"
     assert calls[0]["checkpoint"] == []
+    assert fake_agent.nexus_task_context.agent_name == "sophie"
     assert fake_agent.enter_count == 1
     assert fake_agent.close_count == 1
 

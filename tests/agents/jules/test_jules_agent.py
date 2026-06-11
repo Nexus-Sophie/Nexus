@@ -27,10 +27,22 @@ def make_jules(**kwargs) -> Jules:
 
 def make_pool_manager(mock_sandbox):
     """Create a mocked sandbox pool manager."""
+    configure_empty_project_checkout(mock_sandbox)
     pool_manager = AsyncMock()
     pool_manager.acquire = AsyncMock(return_value=mock_sandbox)
     pool_manager.release = AsyncMock(return_value=None)
     return pool_manager
+
+
+def configure_empty_project_checkout(mock_sandbox):
+    """Configure a sandbox mock for a successful checkout without skills."""
+    mock_sandbox.recreate = AsyncMock()
+    mock_sandbox.run_shell = AsyncMock(side_effect=[
+        {"success": True, "stdout": "new", "stderr": ""},
+        {"success": True, "stdout": "", "stderr": ""},
+    ])
+    mock_sandbox.read_file = AsyncMock(return_value={"success": False, "content": None})
+    mock_sandbox.list_files = AsyncMock(return_value={"success": False, "files": []})
 
 
 def make_stop_response(content: str = "done"):
@@ -121,8 +133,6 @@ class TestJulesContextManager:
 
     async def test_step_passes_all_tools_to_openai(self):
         """Verify all tools passed to OpenAI."""
-        from src.agents.jules.agent import _ALL_TOOL_DEFINITIONS
-
         jules = make_jules()
         mock_sandbox = AsyncMock()
 
@@ -134,7 +144,8 @@ class TestJulesContextManager:
 
         tools_passed = call_kwargs.kwargs["tools"]
         tool_names = {tool["function"]["name"] for tool in tools_passed}
-        assert tool_names == {tool["function"]["name"] for tool in _ALL_TOOL_DEFINITIONS}
+        assert tool_names == {tool["function"]["name"] for tool in jules.tool_definitions}
+        assert "read_skill" not in tool_names
 
 
 class TestJulesReport:

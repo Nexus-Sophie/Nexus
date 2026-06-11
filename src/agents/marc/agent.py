@@ -5,25 +5,18 @@ from typing import List
 from mwin import LLMProvider, track
 from openai.types.chat.chat_completion import ChatCompletion
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
-from pydantic import ConfigDict, PrivateAttr
+from pydantic import ConfigDict, Field, PrivateAttr
 
 from src.agents.base.agent import Agent, BaseAgentStepResult, ModelConfig
 from src.agents.marc.system_prompt import MARC_SYSTEM_PROMPT
 from src.sandbox import PYTHON_312, Sandbox, SandboxConfig, SandboxPoolManager, get_sandbox_pool_manager
+from src.tools.code.github.client import GithubTools
 from src.tools.code.github.readonly import GITHUB_READONLY_TOOL_DEFINITIONS, GithubReadOnlyTools
 from src.tools.nexus import NexusTaskContext
 from src.tools.product import PRODUCT_TOOL_DEFINITIONS, ProductTools
 from src.tools.sandbox import RUN_SHELL, SandboxToolKit
+from src.tools.skills import READ_SKILL, project_path_for_repo
 from src.tools.web_search import web_search, TOOL_DEFINITION as WEB_SEARCH
-
-
-_ALL_TOOL_DEFINITIONS = [
-    RUN_SHELL,
-    WEB_SEARCH,
-    *GITHUB_READONLY_TOOL_DEFINITIONS,
-    *PRODUCT_TOOL_DEFINITIONS,
-]
-
 
 class Marc(Agent):
     """Marc — Nexus product manager agent."""
@@ -35,6 +28,12 @@ class Marc(Agent):
     github_token: str | None = None
     sandbox_config: SandboxConfig = PYTHON_312
     sandbox_workspace_key: str | None = None
+    tool_definitions: List[dict] = Field(default_factory=lambda: [
+        RUN_SHELL,
+        WEB_SEARCH,
+        *GITHUB_READONLY_TOOL_DEFINITIONS,
+        *PRODUCT_TOOL_DEFINITIONS,
+    ])
 
     _sandbox: Sandbox | None = PrivateAttr(default=None)
     _sandbox_pool_manager: SandboxPoolManager | None = PrivateAttr(default=None)
@@ -56,6 +55,7 @@ class Marc(Agent):
             repo_url=repo_url,
             workspace_key=self.sandbox_workspace_key,
         )
+        await self.prepare_project_checkout(self._sandbox)
         sandbox_tools = SandboxToolKit(self._sandbox)
         github_readonly_tools = GithubReadOnlyTools(
             default_repo=self.github_repo,
@@ -83,10 +83,34 @@ class Marc(Agent):
                 repo_lines.append(f"- GitHub repo URL: {repo_url}")
             if self.github_token:
                 repo_lines.append(f"- GitHub token: {self.github_token}")
+            if self.github_repo:
+                repo_lines.append(f"- Local path: /workspace/{self.github_repo.rsplit('/', 1)[-1]}")
             if current_project:
                 repo_lines.append(f"- Project: {current_project}")
             self.system_prompt = self.system_prompt + "\n".join(repo_lines) + "\n"
+        installed_skills = await self.configure_skills(self._sandbox, self.github_repo)
+        # Expose read_skill to the model only when this project installed at least one skill.
+        if installed_skills and READ_SKILL not in self.tool_definitions:
+            self.tool_definitions.append(READ_SKILL)
         return self
+
+    async def prepare_project_checkout(self, sandbox: Sandbox) -> None:
+        """Clone or pull the assigned repository before the model starts working."""
+        if not self.github_repo:
+            return
+
+        repo_url = self.repo_url or f"https://github.com/{self.github_repo}"
+        if self.github_token and repo_url == f"https://github.com/{self.github_repo}":
+            repo_url = f"https://x-access-token:{self.github_token}@github.com/{self.github_repo}"
+
+        result = await GithubTools(sandbox).fetch_from_github(
+            repo_url=repo_url,
+            local_path=project_path_for_repo(self.github_repo),
+        )
+        if not result.get("success", False):
+            raise RuntimeError(
+                f"Failed to prepare repository {self.github_repo}: {result.get('message', 'git fetch failed')}"
+            )
 
     async def __aexit__(self, *args) -> None:
         if self._sandbox is not None:
@@ -106,7 +130,7 @@ class Marc(Agent):
         kwargs: dict = {
             "model": self.llm_config.model,
             "messages": current_turn_ctx,
-            "tools": _ALL_TOOL_DEFINITIONS,
+            "tools": self.tool_definitions,
         }
         if self.sample_config:
             if self.sample_config.top_p is not None:

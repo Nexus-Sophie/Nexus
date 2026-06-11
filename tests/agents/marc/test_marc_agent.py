@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import anyio
 
-from src.agents.marc.agent import Marc, _ALL_TOOL_DEFINITIONS
+from src.agents.marc.agent import Marc
 
 
 EXPECTED_TOOLS = {
@@ -50,6 +50,17 @@ def make_marc() -> Marc:
     )
 
 
+def configure_empty_project_checkout(sandbox) -> None:
+    """Configure a sandbox mock for a successful checkout without skills."""
+    sandbox.recreate = AsyncMock()
+    sandbox.run_shell = AsyncMock(side_effect=[
+        {"success": True, "stdout": "new", "stderr": ""},
+        {"success": True, "stdout": "", "stderr": ""},
+    ])
+    sandbox.read_file = AsyncMock(return_value={"success": False, "content": None})
+    sandbox.list_files = AsyncMock(return_value={"success": False, "files": []})
+
+
 def _tool_name(definition) -> str:
     """Return a tool definition name."""
     if isinstance(definition, dict):
@@ -67,6 +78,7 @@ def test_marc_tool_kits_are_read_only():
             read_file=AsyncMock(),
             list_files=AsyncMock(),
         )
+        configure_empty_project_checkout(sandbox)
         pool = SimpleNamespace(acquire=AsyncMock(return_value=sandbox), release=AsyncMock())
         marc = make_marc()
         marc.set_nexus_task_context(
@@ -90,7 +102,7 @@ def test_marc_tool_kits_are_read_only():
 
 def test_marc_tool_definitions_include_only_expected_read_only_tools():
     """Verify marc tool definitions include only expected read only tools."""
-    tool_names = {_tool_name(definition) for definition in _ALL_TOOL_DEFINITIONS}
+    tool_names = {_tool_name(definition) for definition in make_marc().tool_definitions}
 
     assert tool_names == EXPECTED_TOOLS
     assert FORBIDDEN_MUTATING_TOOLS.isdisjoint(tool_names)

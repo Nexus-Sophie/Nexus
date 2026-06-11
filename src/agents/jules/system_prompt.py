@@ -26,7 +26,7 @@ Available runtimes and tools:
 Follow this workflow for every task:
 
 1. **Understand** - re-read the task. If anything is ambiguous, ask before touching code.
-2. **Setup** - use FetchFromGithub with the Fork Clone URL from "Your Repository". Pass the Upstream URL as `upstream_url` so the `upstream` remote is set automatically. If the repo is already cloned, pull to continue from where you left off.
+2. **Setup** - Nexus prepares the repository before your first model step. Use the Local path from "Your Repository"; do not clone the repo yourself unless the path is missing or clearly stale.
 3. **Issue** - search issues with keyword first. If no like issue exists ever, create a GitHub issue on the **upstream** repo describing what you are about to do. Note the issue number.
 4. **Explore** - identify build tool, module layout, package conventions, Spring Boot version, test strategy, and affected code paths before editing.
 5. **Plan** - briefly state your plan with markdown and update it as you learn more.
@@ -45,10 +45,7 @@ Follow this workflow for every task:
 - Before your first commit in a repo, configure git identity:
     git -C /workspace/<project> config user.name "Nexus-Jules"
     git -C /workspace/<project> config user.email "jules@nexus.local"
-- Before you start your task, fetch and pull the main branch (commonly main/master) of the remote upstream repository again,
-sync the latest changes from the remote upstream's main branch to your remote origin's main branch,
-and then pull the remote origin's main branch to both your local main branch and the working feature branch.
-If conflicts arise, resolve them.
+- Before you start changing code, verify the prepared checkout is on an up-to-date base branch. If conflicts arise, resolve them.
 - Create a feature branch based on origin/main before making changes - never commit directly to main.
 - Push to `origin` (your fork) frequently - this saves your work so you can continue in the next session.
 - Never hard-code secrets, tokens, passwords, or production endpoints in source files.

@@ -4,7 +4,7 @@ import json
 from typing import Literal, Any, List, Dict, Callable, Coroutine, TypedDict, Required, NotRequired
 from dataclasses import dataclass
 from textwrap import dedent
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from openai import AsyncOpenAI, RateLimitError, APIConnectionError, APIError
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion_message_param import (
@@ -20,6 +20,13 @@ from openai.types.chat.chat_completion_message_tool_call import Function
 from mwin import track
 from src.logger import logger
 from src.exception import ToolNotFoundError
+from src.sandbox import Sandbox
+from src.tools.skills import (
+    SkillRegistry,
+    SkillToolKit,
+    append_skills_system_prompt,
+    project_path_for_repo,
+)
 from src.utils.asynchronous import make_async
 
 
@@ -77,6 +84,8 @@ class Agent(BaseModel):
 
     name: str
     tool_kits: Dict[str, Callable] | None
+    # Instance-owned because project-specific tools must not leak across agent instances.
+    tool_definitions: List[dict] = Field(default_factory=list)
     base_url: str
     api_key: str
     system_prompt: str
@@ -85,6 +94,8 @@ class Agent(BaseModel):
     max_attempts: int | None = None
     openai_client: AsyncOpenAI | None = None
     current_turn_ctx_len: int = 0
+
+    _skill_registry: SkillRegistry | None = PrivateAttr(default=None)
 
 
     @model_validator(mode="after")
@@ -97,6 +108,46 @@ class Agent(BaseModel):
         if self.base_url and self.api_key:
             self.openai_client = AsyncOpenAI(base_url=self.base_url, api_key=self.api_key)
         return self
+
+    def _install_skills(self, registry: SkillRegistry) -> list[str]:
+        """Install a skill catalog into this agent instance.
+
+        Args:
+            registry: Skills available to this agent instance.
+
+        Returns:
+            Names of discovered skills.
+        """
+        if self._skill_registry is not None:
+            self._ensure_skill_tool()
+            return [skill.name for skill in self._skill_registry.skills]
+
+        self._skill_registry = registry
+        if not registry:
+            return []
+
+        self.system_prompt = append_skills_system_prompt(self.system_prompt, registry)
+        self._ensure_skill_tool()
+        return [skill.name for skill in registry.skills]
+
+    def _ensure_skill_tool(self):
+        """Register the read_skill callable when skills are available."""
+        if not self._skill_registry:
+            return
+        if self.tool_kits is None:
+            self.tool_kits = {}
+        self.tool_kits.update(SkillToolKit(self._skill_registry).all_tools)
+
+    async def configure_skills(self, sandbox: Sandbox, github_repo: str | None) -> list[str]:
+        """Load skills from the checked-out project directory when it exists."""
+        if not github_repo:
+            return self._install_skills(SkillRegistry())
+        registry = await SkillRegistry.from_sandbox_project(
+            sandbox,
+            project_path=project_path_for_repo(github_repo),
+            agent_name=self.name.lower(),
+        )
+        return self._install_skills(registry)
 
     @track(tags=["agent"])
     async def work(
@@ -127,8 +178,7 @@ class Agent(BaseModel):
             assert checkpoint is not None, "Checkpoint is required when from_checkpoint=True"
             # copy a new checkpoint to prevent in-place edit checkpoint
             user_message: ChatCompletionUserMessageParam = {"role": "user", "content": question}
-            current_turn_ctx: List[ChatCompletionMessageParam] = []
-            current_turn_ctx.extend(checkpoint)
+            current_turn_ctx = list(checkpoint)
             current_turn_ctx.append(user_message)
         else:
             system_message: ChatCompletionSystemMessageParam = {"role": "system", "content": self.system_prompt}
@@ -173,7 +223,7 @@ class Agent(BaseModel):
                         f"Agent {self.name} triggers concurrency limit and start waiting for 1 minute."
                     )
                     await asyncio.sleep(60)
-                    continue
+                continue
             
             tries += 1
         

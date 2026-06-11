@@ -2,7 +2,7 @@ from typing import ClassVar, List
 
 from mwin import LLMProvider, track
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
-from pydantic import ConfigDict, PrivateAttr
+from pydantic import ConfigDict, Field, PrivateAttr
 
 from src.agents.base.agent import BaseAgentStepResult, ModelConfig
 from src.agents.base.code_agent import CodeAgent
@@ -22,18 +22,9 @@ from src.tools.nexus import (
     NexusTaskContext,
 )
 from src.tools.sandbox import SANDBOX_TOOL_DEFINITIONS, SandboxToolKit
+from src.tools.skills import READ_SKILL
 from src.tools.web_search import TOOL_DEFINITION as WEB_SEARCH
 from src.tools.web_search import web_search
-
-
-_ALL_TOOL_DEFINITIONS = [
-    *SANDBOX_TOOL_DEFINITIONS,
-    *GITHUB_TOOLS_SCHEMA,
-    *NEXUS_TOOL_DEFINITIONS,
-    WEB_FETCH,
-    WEB_SEARCH,
-]
-
 
 class Jules(CodeAgent):
     """Jules - a Java Spring Boot coding agent with a sandboxed Docker workspace.
@@ -50,6 +41,13 @@ class Jules(CodeAgent):
     GITHUB_NICKNAME: ClassVar[str] = "Nexus-Jules"
     sandbox_config: SandboxConfig = SPRING_BOOT_JAVA_21
     sandbox_workspace_key: str | None = None
+    tool_definitions: List[dict] = Field(default_factory=lambda: [
+        *SANDBOX_TOOL_DEFINITIONS,
+        *GITHUB_TOOLS_SCHEMA,
+        *NEXUS_TOOL_DEFINITIONS,
+        WEB_FETCH,
+        WEB_SEARCH,
+    ])
 
     _sandbox: Sandbox | None = PrivateAttr(default=None)
     _sandbox_pool_manager: SandboxPoolManager | None = PrivateAttr(default=None)
@@ -68,6 +66,7 @@ class Jules(CodeAgent):
             repo_url=repo_url,
             workspace_key=self.sandbox_workspace_key,
         )
+        fork_repo, fork_clone_url = await self.prepare_project_checkout(self._sandbox)
 
         sandbox_tools = SandboxToolKit(self._sandbox)
         github_kit = GithubTools(self._sandbox, self._nexus_task_context)
@@ -94,15 +93,18 @@ class Jules(CodeAgent):
                     f"- Upstream repo: {self.github_repo}  (create issues and open PRs here)"
                 )
                 repo_lines.append(f"- Upstream URL: {upstream_url}")
-                if self.github_token:
-                    fork_repo = await self._ensure_fork(self.github_token, self.github_repo)
-                    fork_clone_url = f"https://x-access-token:{self.github_token}@github.com/{fork_repo}"
+                repo_lines.append(f"- Local path: /workspace/{self.github_repo.rsplit('/', 1)[-1]}")
+                if fork_repo and fork_clone_url:
                     repo_lines.append(
                         f"- Your fork: {fork_repo}  (clone this as `origin`, push here frequently)"
                     )
                     repo_lines.append(f"- Fork clone URL: {fork_clone_url}")
             self.system_prompt = self.system_prompt + "\n".join(repo_lines) + "\n"
 
+        installed_skills = await self.configure_skills(self._sandbox, self.github_repo)
+        # Expose read_skill to the model only when this project installed at least one skill.
+        if installed_skills and READ_SKILL not in self.tool_definitions:
+            self.tool_definitions.append(READ_SKILL)
         return self
 
     async def _ensure_fork(self, token: str, upstream_repo: str) -> str:
@@ -128,7 +130,7 @@ class Jules(CodeAgent):
         kwargs: dict = {
             "model": self.llm_config.model,
             "messages": current_turn_ctx,
-            "tools": _ALL_TOOL_DEFINITIONS,
+            "tools": self.tool_definitions,
         }
         if self.sample_config:
             if self.sample_config.top_p is not None:

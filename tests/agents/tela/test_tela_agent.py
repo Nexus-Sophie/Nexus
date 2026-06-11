@@ -43,6 +43,42 @@ def make_pool_manager(mock_sandbox):
     return pool_manager
 
 
+def configure_empty_project_checkout(mock_sandbox):
+    """Configure a sandbox mock for a successful checkout without skills."""
+    mock_sandbox.recreate = AsyncMock()
+    mock_sandbox.run_shell = AsyncMock(side_effect=[
+        {"success": True, "stdout": "new", "stderr": ""},
+        {"success": True, "stdout": "", "stderr": ""},
+        {"success": True, "stdout": "", "stderr": ""},
+        {"success": True, "stdout": "", "stderr": ""},
+    ])
+    mock_sandbox.read_file = AsyncMock(return_value={"success": False, "content": None})
+    mock_sandbox.list_files = AsyncMock(return_value={"success": False, "files": []})
+
+
+def configure_project_checkout_with_skills(mock_sandbox):
+    """Configure a sandbox mock for a successful checkout with one Tela skill."""
+    configure_empty_project_checkout(mock_sandbox)
+
+    async def fake_read_file(path: str):
+        if path == "/workspace/repo/.nexus/skills/tela/backend/SKILL.md":
+            return {
+                "success": True,
+                "content": "---\nname: backend\ndescription: Tela backend workflow.\n---\n\n# Backend\n",
+            }
+        return {"success": False, "content": None}
+
+    async def fake_list_files(path: str):
+        if path == "/workspace/repo/.nexus/skills/tela":
+            return {"success": True, "files": [{"name": "backend", "type": "directory"}]}
+        if path == "/workspace/repo/.nexus/skills":
+            return {"success": True, "files": [{"name": "tela", "type": "directory"}]}
+        return {"success": False, "files": []}
+
+    mock_sandbox.read_file = AsyncMock(side_effect=fake_read_file)
+    mock_sandbox.list_files = AsyncMock(side_effect=fake_list_files)
+
+
 def make_stop_response(content: str = "done"):
     """Build a minimal streaming response that stops."""
     async def _stream():
@@ -127,6 +163,7 @@ class TestContextManager:
         """Verify enter forks when not exists."""
         tela = make_tela(github_repo="owner/repo", github_token="ghp_test")
         mock_sandbox = AsyncMock()
+        configure_empty_project_checkout(mock_sandbox)
 
         with patch("src.agents.tela.agent.get_sandbox_pool_manager", return_value=make_pool_manager(mock_sandbox)):
             with patch("src.agents.base.code_agent.httpx.AsyncClient") as mock_client_cls:
@@ -147,11 +184,14 @@ class TestContextManager:
         mock_http.post.assert_awaited_once()
         post_url = mock_http.post.call_args[0][0]
         assert "owner/repo/forks" in post_url
+        clone_call = mock_sandbox.run_shell.call_args_list[1][0][0]
+        assert "git clone" in clone_call
 
     async def test_enter_skips_fork_creation_when_exists(self):
         """Verify enter skips fork creation when exists."""
         tela = make_tela(github_repo="owner/repo", github_token="ghp_test")
         mock_sandbox = AsyncMock()
+        configure_empty_project_checkout(mock_sandbox)
 
         with patch("src.agents.tela.agent.get_sandbox_pool_manager", return_value=make_pool_manager(mock_sandbox)):
             with patch("src.agents.base.code_agent.httpx.AsyncClient") as mock_client_cls:
@@ -166,6 +206,31 @@ class TestContextManager:
                     pass
 
         mock_http.post.assert_not_awaited()
+
+    async def test_enter_loads_project_skills_after_checkout(self):
+        """Verify project skills are available before the first model step."""
+        tela = make_tela(github_repo="owner/repo", github_token="ghp_test")
+        mock_sandbox = AsyncMock()
+        configure_project_checkout_with_skills(mock_sandbox)
+
+        with patch("src.agents.tela.agent.get_sandbox_pool_manager", return_value=make_pool_manager(mock_sandbox)):
+            with patch("src.agents.base.code_agent.httpx.AsyncClient") as mock_client_cls:
+                mock_http = AsyncMock()
+                mock_http.get.return_value = MagicMock(
+                    status_code=200,
+                    json=MagicMock(return_value={"fork": True, "parent": {"full_name": "owner/repo"}}),
+                )
+                mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
+                mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+                async with tela:
+                    assert "<skills>" in tela.system_prompt
+                    assert "<name>backend</name>" in tela.system_prompt
+                    assert "Tela backend workflow." in tela.system_prompt
+                    assert "read_skill" in tela.tool_kits
+                    assert "read_skill" in {
+                        definition["function"]["name"] for definition in tela.tool_definitions
+                    }
+                    assert "# Backend" in tela.tool_kits["read_skill"]("backend")
 
 
 
@@ -206,8 +271,6 @@ class TestStep:
 
     async def test_all_tools_passed_to_openai(self):
         """Verify all tools passed to openai."""
-        from src.agents.tela.agent import _ALL_TOOL_DEFINITIONS
-
         tela = make_tela()
         mock_sandbox = AsyncMock()
         mock_sandbox._workdir = "/tmp/nexus_test"
@@ -219,7 +282,8 @@ class TestStep:
                 call_kwargs = tela.openai_client.chat.completions.create.call_args
         tools_passed = call_kwargs.kwargs["tools"]
         tool_names = {t["function"]["name"] for t in tools_passed}
-        assert tool_names == {t["function"]["name"] for t in _ALL_TOOL_DEFINITIONS}
+        assert tool_names == {t["function"]["name"] for t in tela.tool_definitions}
+        assert "read_skill" not in tool_names
 
 
 class TestGithubTools:
@@ -535,8 +599,6 @@ class TestFactory:
             )
         assert tela.llm_config.model == "gpt-4o-mini"
         assert tela.github_token == "ghp_abc"
-
-
 
 
 
