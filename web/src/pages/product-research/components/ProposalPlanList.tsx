@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { getErrorDetail } from '@/api/client';
 import { getTask } from '@/api/tasks';
-import type { ApiFeature, ApiTask } from '@/api/types';
+import type { ApiFeature, ApiFeatureItemStatus, ApiTask } from '@/api/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -54,6 +54,10 @@ type ProposalPlanListProps = {
   onRetryFeatureItem: (featureItemId: string) => Promise<void>;
   retryingFeatureItemId: string | null;
 };
+
+function getWorkItemDisplayStatus(itemStatus: ApiFeatureItemStatus, task: ApiTask | null | undefined): ApiFeatureItemStatus {
+  return itemStatus === 'failed' || task?.status === 'failed' ? 'failed' : itemStatus;
+}
 
 export function ProposalPlanList({ features, onRetryFeatureItem, retryingFeatureItemId }: ProposalPlanListProps) {
   const { t } = useTranslation();
@@ -187,7 +191,10 @@ export function ProposalPlanList({ features, onRetryFeatureItem, retryingFeature
               const activeItems = items.filter(
                 item => item.status === 'in_progress',
               ).length;
-              const failedItems = items.filter(item => item.status === 'failed').length;
+              const failedItems = items.filter(item => {
+                const task = item.task_id ? tasksById[item.task_id] : null;
+                return getWorkItemDisplayStatus(item.status, task) === 'failed';
+              }).length;
 
               return (
                 <TableRow
@@ -319,12 +326,13 @@ export function ProposalPlanList({ features, onRetryFeatureItem, retryingFeature
                     </p>
                   ) : (
                     (selectedFeature.items ?? []).map(item => {
-                      const itemMeta = FEATURE_ITEM_STATUS_META[item.status];
                       const isExpanded = expandedItemIds.includes(item.id);
                       const task = item.task_id ? tasksById[item.task_id] : null;
                       const pullRequestUrl = getTaskPullRequestUrl(task);
                       const taskLoadError = item.task_id ? taskLoadErrorsById[item.task_id] : null;
-                      const taskError = item.status === 'failed'
+                      const displayStatus = getWorkItemDisplayStatus(item.status, task);
+                      const itemMeta = FEATURE_ITEM_STATUS_META[displayStatus];
+                      const taskError = displayStatus === 'failed'
                         ? task?.error ?? taskLoadError ?? t('productResearch.workItemFailedFallback')
                         : null;
                       const isRetrying = retryingFeatureItemId === item.id;
@@ -377,9 +385,9 @@ export function ProposalPlanList({ features, onRetryFeatureItem, retryingFeature
                                     variant={itemMeta.variant}
                                     className={itemMeta.className}
                                   >
-                                    {t(`productResearch.featureItemStatus.${item.status}`)}
+                                    {t(`productResearch.featureItemStatus.${displayStatus}`)}
                                   </Badge>
-                                  {item.status === 'failed' ? (
+                                  {displayStatus === 'failed' ? (
                                     <Button
                                       type="button"
                                       size="sm"
