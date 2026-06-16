@@ -15,8 +15,8 @@ def test_git_install_includes_ca_certificates():
 
 
 @pytest.mark.asyncio
-async def test_start_fails_when_init_command_fails(monkeypatch):
-    """Verify a failed initialization command does not leave a usable sandbox."""
+async def test_start_runs_init_command_without_interpreting_shell_result(monkeypatch):
+    """Verify start delegates initialization command execution to run_shell."""
     container = MagicMock()
     client = MagicMock()
     client.containers.run.return_value = container
@@ -39,8 +39,9 @@ async def test_start_fails_when_init_command_fails(monkeypatch):
         }
     )
 
-    with pytest.raises(RuntimeError, match="broken: command failed"):
-        await sandbox.start()
+    result = await sandbox.start()
 
-    container.kill.assert_called_once_with()
-    assert sandbox._container is None
+    assert result is sandbox
+    sandbox.run_shell.assert_awaited_once_with("exit 1")
+    container.kill.assert_not_called()
+    assert sandbox._container is container
