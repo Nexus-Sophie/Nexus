@@ -13,6 +13,7 @@ from src.server.api.dependencies import get_current_user
 from src.server.config import get_settings
 from src.server.postgres.database import Database
 from src.server.postgres.models import (
+    AgentName,
     TaskCategory,
     TaskStatus,
     UserRecord,
@@ -24,7 +25,7 @@ from src.server.postgres.repositories import (
     TaskWorkItemRepository,
     WorkspaceRepository,
 )
-from src.server.runner import AgentTaskRunner, TaskDispatchError
+from src.server.runner import AgentTaskRunner, TaskDispatchError, TaskSubmission
 from src.server.schemas import (
     TaskConsultRequest,
     TaskConsultResponse,
@@ -73,7 +74,14 @@ async def create_task(
         raise HTTPException(status_code=404, detail="Agent instance not found")
 
     try:
-        task_id = await runner.submit_task(payload)
+        task_id = await runner.submit_task(
+            TaskSubmission(
+                agent_instance_id=payload.agent_instance_id,
+                agent=AgentName(payload.agent.value),
+                question=payload.question,
+                external_issue_url=payload.external_issue_url,
+            )
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except TaskDispatchError as exc:

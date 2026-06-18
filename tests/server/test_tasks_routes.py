@@ -237,6 +237,11 @@ def test_create_task_returns_category_from_persisted_task(monkeypatch: pytest.Mo
         'status': TaskStatus.queued.value,
     }
     runner.submit_task.assert_awaited_once()
+    submission = runner.submit_task.await_args.args[0]
+    assert submission.agent_instance_id == created_task.agent_instance_id
+    assert submission.agent == AgentName(created_task.agent.value)
+    assert submission.question == created_task.question
+    assert submission.external_issue_url is None
 
 
 def test_list_tasks_passes_filters_to_repository(monkeypatch: pytest.MonkeyPatch) -> None:
