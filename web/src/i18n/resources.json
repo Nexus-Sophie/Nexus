@@ -393,6 +393,15 @@
         "finished": "结束时间",
         "result": "结果",
         "failedToLoad": "加载任务失败。"
+      },
+      "notFound": {
+        "pageTitle": "页面未找到",
+        "pageDescription": "这个工作区地址可能已失效或输入有误。",
+        "eyebrow": "404",
+        "heading": "这里没有可打开的页面",
+        "body": "你访问的工作区页面不存在，可能是链接过期、路径输入有误，或功能入口已经调整。你可以回到任务看板继续工作。",
+        "taskBoardAction": "回到任务看板",
+        "backAction": "返回上一页"
       }
     }
   },
@@ -790,6 +799,15 @@
         "finished": "Finished",
         "result": "Result",
         "failedToLoad": "Failed to load task."
+      },
+      "notFound": {
+        "pageTitle": "Page not found",
+        "pageDescription": "This workspace address may be stale or mistyped.",
+        "eyebrow": "404",
+        "heading": "There is no page here",
+        "body": "The workspace page you opened does not exist. The link may be outdated, mistyped, or moved. You can return to the task board and continue from there.",
+        "taskBoardAction": "Go to task board",
+        "backAction": "Go back"
       }
     }
   }

@@ -5,6 +5,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { Toaster } from '@/components/ui/toaster';
 import LoginPage from '@/pages/login';
+import { DashboardNotFoundPage } from '@/pages/DashboardNotFoundPage';
 import { NexusReviewPage } from '@/pages/nexus-review';
 import PricingPage from '@/pages/pricing';
 import ProcessTrackingPage from '@/pages/process-tracking';
@@ -79,7 +80,7 @@ function App() {
               />
 
               <Route path="/task/:taskId" element={<TaskDetailPage />} />
-              <Route path="*" element={<Navigate to={DEFAULT_WORKSPACE_PATH} replace />} />
+              <Route path="*" element={<DashboardNotFoundPage />} />
             </Route>
           </Route>
         </Routes>
