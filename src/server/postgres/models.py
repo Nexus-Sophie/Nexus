@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import enum
 import uuid
@@ -42,6 +42,7 @@ class TaskStatus(str, enum.Enum):
 class TaskCategory(str, enum.Enum):
     coding = "coding"
     pm = "product discovery"
+    review = "review"
 
 
 TASK_STATUS_VARCHAR_LENGTH = 32
@@ -53,6 +54,7 @@ class AgentName(str, enum.Enum):
     sophie = "sophie"
     jules = "jules"
     marc = "marc"
+    assistant = "assistant"
 
 
 class WorkspaceStatus(str, enum.Enum):
@@ -681,5 +683,55 @@ class GithubPullRequestFeedbackRecord(Base):
         nullable=False,
         default=utc_now,
         onupdate=utc_now,
+        server_default=func.now(),
+    )
+
+
+class AssistantStateRecord(Base):
+    __tablename__ = "assistant_state"
+
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=func.now(),
+    )
+
+
+class AssistantEventRecord(Base):
+    __tablename__ = "assistant_event"
+    __table_args__ = (
+        Index("ix_assistant_event_agent_created", "agent_instance_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    agent_instance_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("agent_instance.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("task.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    repo: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    project: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_pull_request_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    external_issue_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
         server_default=func.now(),
     )

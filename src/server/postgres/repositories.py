@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import uuid
 from decimal import Decimal
@@ -25,6 +25,8 @@ from src.server.postgres.models import (
     ProductProposalStatus,
     ProposalPlanningRunRecord,
     ProposalPlanningRunStatus,
+    AssistantEventRecord,
+    AssistantStateRecord,
     TaskCategory,
     TaskExecutionEventRecord,
     GithubPullRequestFeedbackKind,
@@ -244,6 +246,28 @@ class WorkspaceRepository:
             select(WorkspaceRecord)
             .join(AgentInstanceRecord, AgentInstanceRecord.id == WorkspaceRecord.agent_instance_id)
             .where(AgentInstanceRecord.user_id == user_id)
+        )
+        result = await session.execute(query)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_active_for_agent(
+        session: AsyncSession,
+        *,
+        agent: AgentName,
+        limit: int = 200,
+    ) -> list[WorkspaceRecord]:
+        """List workspaces for active instances of an agent."""
+        query = (
+            select(WorkspaceRecord)
+            .join(AgentInstanceRecord, AgentInstanceRecord.id == WorkspaceRecord.agent_instance_id)
+            .where(
+                AgentInstanceRecord.agent == agent,
+                AgentInstanceRecord.is_active.is_(True),
+                WorkspaceRecord.github_repo.is_not(None),
+            )
+            .order_by(WorkspaceRecord.updated_at.asc(), WorkspaceRecord.created_at.asc())
+            .limit(limit)
         )
         result = await session.execute(query)
         return list(result.scalars().all())
@@ -909,6 +933,7 @@ class TaskRepository:
         repo: str | None,
         project: str | None,
         external_issue_url: str | None,
+        external_pull_request_url: str | None = None,
     ) -> TaskRecord:
         """Create a pending tracking record."""
         task = TaskRecord(
@@ -919,6 +944,7 @@ class TaskRepository:
             repo=repo,
             project=project,
             external_issue_url=external_issue_url,
+            external_pull_request_url=external_pull_request_url,
             status=TaskStatus.queued,
         )
         session.add(task)
@@ -936,6 +962,7 @@ class TaskRepository:
         repo: str | None,
         project: str | None,
         external_issue_url: str | None,
+        external_pull_request_url: str | None = None,
     ) -> TaskRecord:
         """Create a new database record."""
         task = await TaskRepository.create_pending(
@@ -947,6 +974,7 @@ class TaskRepository:
             repo=repo,
             project=project,
             external_issue_url=external_issue_url,
+            external_pull_request_url=external_pull_request_url,
         )
         await session.commit()
         await session.refresh(task)
@@ -1026,11 +1054,11 @@ class TaskRepository:
         *,
         limit: int = 200,
     ) -> list[TaskRecord]:
-        """List tasks needing external pull request discovery."""
+        """List tasks whose existing pull request may have follow-up GitHub events."""
         query = (
             select(TaskRecord)
             .where(
-                TaskRecord.category == TaskCategory.coding,
+                TaskRecord.category.in_([TaskCategory.coding, TaskCategory.review]),
                 TaskRecord.repo.is_not(None),
                 TaskRecord.external_pull_request_url.is_not(None),
                 TaskRecord.status == TaskStatus.waiting_for_review,
@@ -1040,6 +1068,27 @@ class TaskRepository:
         )
         result = await session.execute(query)
         return list(result.scalars().all())
+
+    @staticmethod
+    async def get_latest_by_external_pull_request_url(
+        session: AsyncSession,
+        *,
+        agent_instance_id: uuid.UUID | None = None,
+        external_pull_request_url: str,
+        category: TaskCategory | None = None,
+    ) -> TaskRecord | None:
+        """Return the newest task bound to a pull request URL."""
+        query = select(TaskRecord).where(
+            TaskRecord.external_pull_request_url == external_pull_request_url,
+        )
+        if agent_instance_id is not None:
+            query = query.where(TaskRecord.agent_instance_id == agent_instance_id)
+        if category is not None:
+            query = query.where(TaskRecord.category == category)
+        result = await session.execute(
+            query.order_by(TaskRecord.created_at.desc()).limit(1)
+        )
+        return result.scalar_one_or_none()
 
     @staticmethod
     async def list_review_queue(
@@ -1310,6 +1359,8 @@ class TaskRepository:
     async def set_closed(
         session: AsyncSession,
         task_id: uuid.UUID,
+        *,
+        result: str | None = None,
     ) -> TaskRecord | None:
         """Mark a task as closed."""
         task = await session.get(TaskRecord, task_id)
@@ -1318,6 +1369,8 @@ class TaskRepository:
 
         now = utc_now()
         task.status = TaskStatus.closed
+        if result is not None:
+            task.result = result
         task.error = None
         task.finished_at = now
         task.resume_status = None
@@ -1943,6 +1996,65 @@ class GithubPullRequestFeedbackRepository:
         await session.commit()
 
 
+class AssistantEventRepository:
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        *,
+        agent_instance_id: uuid.UUID,
+        summary: str,
+        task_id: uuid.UUID | None,
+        repo: str | None,
+        project: str | None,
+        external_pull_request_url: str | None,
+        external_issue_url: str | None,
+    ) -> AssistantEventRecord:
+        event = AssistantEventRecord(
+            agent_instance_id=agent_instance_id,
+            task_id=task_id,
+            repo=repo,
+            project=project,
+            external_pull_request_url=external_pull_request_url,
+            external_issue_url=external_issue_url,
+            summary=summary,
+        )
+        session.add(event)
+        await session.commit()
+        await session.refresh(event)
+        return event
+
+    @staticmethod
+    async def list_recent(
+        session: AsyncSession,
+        *,
+        agent_instance_id: uuid.UUID,
+        limit: int,
+        task_id: uuid.UUID | None = None,
+        external_pull_request_url: str | None = None,
+        external_issue_url: str | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> list[AssistantEventRecord]:
+        query = select(AssistantEventRecord).where(
+            AssistantEventRecord.agent_instance_id == agent_instance_id,
+        )
+        if task_id is not None:
+            query = query.where(AssistantEventRecord.task_id == task_id)
+        if external_pull_request_url is not None:
+            query = query.where(AssistantEventRecord.external_pull_request_url == external_pull_request_url)
+        if external_issue_url is not None:
+            query = query.where(AssistantEventRecord.external_issue_url == external_issue_url)
+        if start_time is not None:
+            query = query.where(AssistantEventRecord.created_at >= start_time)
+        if end_time is not None:
+            query = query.where(AssistantEventRecord.created_at < end_time)
+        query = query.order_by(
+            AssistantEventRecord.created_at.desc(),
+        ).limit(limit)
+        result = await session.execute(query)
+        return list(result.scalars().all())
+
+
 class TaskExecutionEventRepository:
     @staticmethod
     async def list_by_task(
@@ -1961,6 +2073,37 @@ class TaskExecutionEventRepository:
             query = query.limit(limit)
         result = await session.execute(query)
         return list(result.scalars().all())
+
+
+class AssistantStateRepository:
+    @staticmethod
+    async def get(
+        session: AsyncSession,
+        key: str,
+    ) -> str | None:
+        """Return a persisted assistant state value."""
+        record = await session.get(AssistantStateRecord, key)
+        return record.value if record is not None else None
+
+    @staticmethod
+    async def set(
+        session: AsyncSession,
+        *,
+        key: str,
+        value: str | None,
+    ) -> AssistantStateRecord:
+        """Persist a assistant state value."""
+        record = await session.get(AssistantStateRecord, key)
+        now = utc_now()
+        if record is None:
+            record = AssistantStateRecord(key=key, value=value)
+            session.add(record)
+        else:
+            record.value = value
+            record.updated_at = now
+        await session.commit()
+        await session.refresh(record)
+        return record
 
 
 class UserRepository:

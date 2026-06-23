@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -37,11 +38,64 @@ class Settings:
     auth_session_cookie_name: str
     auth_session_ttl_seconds: int
     frontend_base_url: str
+    discord_gateway_enabled: bool
+    discord_gateway_bot_token: str | None
+    discord_gateway_channel_ids: list[str]
+    discord_gateway_user_ids: list[str]
     product_discovery_poll_interval_seconds: int
     product_discovery_poll_task_limit: int
     product_discovery_recent_proposal_limit: int
     product_discovery_pending_proposal_limit: int
     product_workflow_poll_interval_seconds: int
+    assistant_enabled: bool
+    assistant_github_token: str | None
+    assistant_poll_interval_seconds: int
+    assistant_merge_method: str
+    assistant_test_commands: dict[str, list[str]]
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Read a boolean environment value."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_test_commands(name: str) -> dict[str, list[str]]:
+    """Read repo-scoped assistant test commands from JSON."""
+    raw = os.getenv(name, "{}").strip()
+    if not raw:
+        return {}
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError(f"{name} must be a JSON object.")
+
+    commands: dict[str, list[str]] = {}
+    for repo, value in payload.items():
+        if not isinstance(repo, str) or not repo.strip():
+            raise ValueError(f"{name} keys must be repository names or '*'.")
+        if isinstance(value, str):
+            normalized = [value]
+        elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+            normalized = list(value)
+        else:
+            raise ValueError(f"{name}[{repo!r}] must be a string or list of strings.")
+        commands[repo.strip()] = [item.strip() for item in normalized if item.strip()]
+    return commands
+
+
+def _env_list(name: str) -> list[str]:
+    """Read a string list from JSON array or comma-separated environment value."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return []
+    if raw.startswith("["):
+        payload = json.loads(raw)
+        if not isinstance(payload, list) or not all(isinstance(item, str) for item in payload):
+            raise ValueError(f"{name} must be a JSON string array.")
+        return [item.strip() for item in payload if item.strip()]
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 @lru_cache(maxsize=1)
@@ -52,11 +106,13 @@ def get_settings() -> Settings:
     sophie_github_token = os.getenv("NEXUS_SOPHIE_GITHUB_TOKEN")
     jules_github_token = os.getenv("NEXUS_JULES_GITHUB_TOKEN")
     marc_github_token = os.getenv("NEXUS_MARC_GITHUB_TOKEN")
+    assistant_github_token = os.getenv("NEXUS_ASSISTANT_GITHUB_TOKEN")
     github_tokens = {
         "tela": tela_github_token,
         "sophie": sophie_github_token,
         "jules": jules_github_token,
         "marc": marc_github_token,
+        "assistant": assistant_github_token,
     }
 
     return Settings(
@@ -107,6 +163,10 @@ def get_settings() -> Settings:
         auth_session_cookie_name=os.getenv("NEXUS_AUTH_SESSION_COOKIE_NAME", "nexus_session"),
         auth_session_ttl_seconds=int(os.getenv("NEXUS_AUTH_SESSION_TTL_SECONDS", "2592000")),
         frontend_base_url=os.getenv("NEXUS_FRONTEND_BASE_URL", "http://localhost:5174"),
+        discord_gateway_enabled=_env_bool("NEXUS_DISCORD_GATEWAY_ENABLED", False),
+        discord_gateway_bot_token=os.getenv("NEXUS_DISCORD_GATEWAY_BOT_TOKEN"),
+        discord_gateway_channel_ids=_env_list("NEXUS_DISCORD_GATEWAY_CHANNEL_IDS"),
+        discord_gateway_user_ids=_env_list("NEXUS_DISCORD_GATEWAY_USER_IDS"),
         product_discovery_poll_interval_seconds=int(
             os.getenv("NEXUS_PRODUCT_DISCOVERY_POLL_INTERVAL_SECONDS", "3600"),
         ),
@@ -122,4 +182,11 @@ def get_settings() -> Settings:
         product_workflow_poll_interval_seconds=int(
             os.getenv("NEXUS_PRODUCT_WORKFLOW_POLL_INTERVAL_SECONDS", "60"),
         ),
+        assistant_enabled=_env_bool("NEXUS_ASSISTANT_ENABLED", False),
+        assistant_github_token=assistant_github_token,
+        assistant_poll_interval_seconds=int(
+            os.getenv("NEXUS_ASSISTANT_POLL_INTERVAL_SECONDS", "120"),
+        ),
+        assistant_merge_method=os.getenv("NEXUS_ASSISTANT_MERGE_METHOD", "squash"),
+        assistant_test_commands=_env_test_commands("NEXUS_ASSISTANT_TEST_COMMANDS_JSON"),
     )

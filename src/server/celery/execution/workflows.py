@@ -15,7 +15,7 @@ from src.server.postgres.models import (
     TaskWorkItemStatus,
 )
 from src.server.postgres.repositories import TaskWorkItemRepository
-from src.tools.nexus import NexusTaskContext
+from src.tools.nexus import NexusAssistantEventContext, NexusTaskContext
 
 from . import agents, checkpoints, prompt_helper, state
 
@@ -94,6 +94,17 @@ async def run_agent_workflow(
         return
     if task.category == TaskCategory.pm:
         await run_pm_agent_workflow(
+            database=database,
+            task=task,
+            on_progress=on_progress,
+            settings=settings,
+            user_id=user_id,
+            workspace_key=workspace_key,
+            github_repo=github_repo,
+        )
+        return
+    if task.category == TaskCategory.review:
+        await run_review_agent_workflow(
             database=database,
             task=task,
             on_progress=on_progress,
@@ -338,6 +349,107 @@ async def run_pm_agent_workflow(
             on_progress=on_progress,
         )
     await state.mark_waiting_for_review(database, task.id, response.response)
+
+
+async def run_review_agent_workflow(
+    *,
+    database: Database,
+    task: TaskRecord,
+    on_progress,
+    settings: Settings,
+    user_id: uuid.UUID,
+    workspace_key: str,
+    github_repo: str | None,
+):
+    """Run an Assistant PR review turn and keep the PR thread watchable."""
+    repo = task.repo or github_repo
+    project = task.project
+    if not repo or not project:
+        raise RuntimeError("Missing repo/project context.")
+
+    nexus_context = NexusTaskContext(
+        task_id=task.id,
+        database=database,
+        user_id=user_id,
+        repo=repo,
+        project=project,
+        agent_name=task.agent.value,
+    )
+    agent = agents.build_agent(
+        task=task,
+        settings=settings,
+        workspace_key=workspace_key,
+        github_repo=github_repo,
+    )
+    if hasattr(agent, "set_nexus_task_context"):
+        agent.set_nexus_task_context(nexus_context)
+    if hasattr(agent, "set_nexus_assistant_event_context"):
+        agent.set_nexus_assistant_event_context(
+            NexusAssistantEventContext(
+                agent_instance_id=task.agent_instance_id,
+                database=database,
+                repo=repo,
+                project=project,
+                current_task_id=task.id,
+            )
+        )
+
+    async with agent:
+        checkpoint = await state.get_latest_checkpoint(database, task.id)
+        claimed_feedback = await state.claim_pending_github_feedback(
+            database,
+            task.id,
+            limit=settings.github_feedback_batch_size,
+        )
+        if claimed_feedback:
+            feedback_prompt = prompt_helper.build_assistant_github_feedback_prompt(task, claimed_feedback)
+            if checkpoints.checkpoint_completed_prompt(checkpoint, feedback_prompt):
+                logger.info(
+                    "Assistant task %s GitHub feedback was already completed in checkpoint; marking feedback processed.",
+                    task.id,
+                )
+                await state.mark_github_feedback_processed(database, claimed_feedback)
+                await state.mark_review_completed(
+                    database,
+                    task.id,
+                    checkpoints.checkpoint_completion_text(checkpoint),
+                )
+                return
+
+            logger.info(
+                "Assistant task %s is resuming from checkpoint to process %s GitHub feedback item(s).",
+                task.id,
+                len(claimed_feedback),
+            )
+            try:
+                response = await run_agent(
+                    agent=agent,
+                    question=feedback_prompt,
+                    checkpoint=checkpoint,
+                    on_progress=on_progress,
+                )
+            except Exception:
+                await state.requeue_github_feedback(database, claimed_feedback)
+                raise
+            await state.mark_github_feedback_processed(database, claimed_feedback)
+            await state.mark_review_completed(database, task.id, response.response)
+            return
+
+        if checkpoints.checkpoint_completed_prompt(checkpoint, task.question):
+            await state.mark_review_completed(
+                database,
+                task.id,
+                checkpoints.checkpoint_completion_text(checkpoint),
+            )
+            return
+
+        response = await run_agent(
+            agent=agent,
+            question=task.question,
+            checkpoint=checkpoint,
+            on_progress=on_progress,
+        )
+    await state.mark_review_completed(database, task.id, response.response)
 
 
 def all_work_items_review_ready(work_items: list[TaskWorkItemRecord]) -> bool:

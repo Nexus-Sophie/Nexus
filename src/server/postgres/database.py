@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -107,6 +107,18 @@ _REQUIRED_SCHEMA: dict[str, set[str]] = {
         "ignored_reason",
         "processed_at",
         "payload",
+    },
+    "assistant_state": {"key", "value"},
+    "assistant_event": {
+        "id",
+        "agent_instance_id",
+        "task_id",
+        "repo",
+        "project",
+        "external_pull_request_url",
+        "external_issue_url",
+        "summary",
+        "created_at",
     },
 }
 

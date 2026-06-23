@@ -43,6 +43,7 @@ class TaskSubmission:
     agent: AgentName
     question: str
     external_issue_url: str | None = None
+    external_pull_request_url: str | None = None
 
     def __post_init__(self) -> None:
         """Normalize user-facing text while preserving a small validation guard."""
@@ -55,9 +56,15 @@ class TaskSubmission:
             external_issue_url = self.external_issue_url.strip() or None
             object.__setattr__(self, "external_issue_url", external_issue_url)
 
+        if self.external_pull_request_url is not None:
+            external_pull_request_url = self.external_pull_request_url.strip() or None
+            object.__setattr__(self, "external_pull_request_url", external_pull_request_url)
+
 
 def _task_category_for_agent(agent: AgentName) -> TaskCategory:
     """Return the task category used for an agent."""
+    if agent == AgentName.assistant:
+        return TaskCategory.review
     if agent == AgentName.marc:
         return TaskCategory.pm
     return TaskCategory.coding
@@ -221,6 +228,7 @@ class AgentTaskRunner:
             repo=workspace.github_repo,
             project=workspace.project,
             external_issue_url=submission.external_issue_url,
+            external_pull_request_url=submission.external_pull_request_url,
         )
         logger.info(f"Agent `{instance.agent.name}` has workspace `{workspace.workspace_key}`")
         return task

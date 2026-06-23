@@ -80,6 +80,7 @@ async def create_task(
                 agent=AgentName(payload.agent.value),
                 question=payload.question,
                 external_issue_url=payload.external_issue_url,
+                external_pull_request_url=payload.external_pull_request_url,
             )
         )
     except ValueError as exc:
