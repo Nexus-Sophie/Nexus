@@ -60,7 +60,6 @@ class AssistantDiscordMessageHandler(DiscordMessageHandler):
             github_repo=context.workspace.github_repo,
             github_token=self._settings.github_tokens.get(AgentName.assistant.value),
             discord_bot_token=self._settings.discord_gateway_bot_token,
-            review_test_commands=self._settings.assistant_test_commands,
             sandbox_workspace_key=context.workspace.workspace_key,
         )
         agent.set_nexus_assistant_event_context(

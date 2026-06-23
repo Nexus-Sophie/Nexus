@@ -37,7 +37,6 @@ def assistant_settings(**overrides):
     defaults = {
         "assistant_enabled": True,
         "assistant_github_token": "gh-token",
-        "assistant_test_commands": {"owner/repo": ["pytest"]},
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)

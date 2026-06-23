@@ -51,7 +51,6 @@ class Settings:
     assistant_github_token: str | None
     assistant_poll_interval_seconds: int
     assistant_merge_method: str
-    assistant_test_commands: dict[str, list[str]]
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -60,29 +59,6 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _env_test_commands(name: str) -> dict[str, list[str]]:
-    """Read repo-scoped assistant test commands from JSON."""
-    raw = os.getenv(name, "{}").strip()
-    if not raw:
-        return {}
-    payload = json.loads(raw)
-    if not isinstance(payload, dict):
-        raise ValueError(f"{name} must be a JSON object.")
-
-    commands: dict[str, list[str]] = {}
-    for repo, value in payload.items():
-        if not isinstance(repo, str) or not repo.strip():
-            raise ValueError(f"{name} keys must be repository names or '*'.")
-        if isinstance(value, str):
-            normalized = [value]
-        elif isinstance(value, list) and all(isinstance(item, str) for item in value):
-            normalized = list(value)
-        else:
-            raise ValueError(f"{name}[{repo!r}] must be a string or list of strings.")
-        commands[repo.strip()] = [item.strip() for item in normalized if item.strip()]
-    return commands
 
 
 def _env_list(name: str) -> list[str]:
@@ -188,5 +164,4 @@ def get_settings() -> Settings:
             os.getenv("NEXUS_ASSISTANT_POLL_INTERVAL_SECONDS", "120"),
         ),
         assistant_merge_method=os.getenv("NEXUS_ASSISTANT_MERGE_METHOD", "squash"),
-        assistant_test_commands=_env_test_commands("NEXUS_ASSISTANT_TEST_COMMANDS_JSON"),
     )

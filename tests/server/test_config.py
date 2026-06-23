@@ -146,10 +146,6 @@ def test_assistant_settings_are_loaded(monkeypatch):
     monkeypatch.setenv("NEXUS_ASSISTANT_GITHUB_TOKEN", "assistant-token")
     monkeypatch.setenv("NEXUS_ASSISTANT_POLL_INTERVAL_SECONDS", "30")
     monkeypatch.setenv("NEXUS_ASSISTANT_MERGE_METHOD", "merge")
-    monkeypatch.setenv(
-        "NEXUS_ASSISTANT_TEST_COMMANDS_JSON",
-        '{"owner/repo":["pytest"],"*":"uv run pytest"}',
-    )
 
     try:
         settings = get_settings()
@@ -161,7 +157,3 @@ def test_assistant_settings_are_loaded(monkeypatch):
     assert settings.github_tokens["assistant"] == "assistant-token"
     assert settings.assistant_poll_interval_seconds == 30
     assert settings.assistant_merge_method == "merge"
-    assert settings.assistant_test_commands == {
-        "owner/repo": ["pytest"],
-        "*": ["uv run pytest"],
-    }

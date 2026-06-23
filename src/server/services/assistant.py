@@ -272,7 +272,6 @@ def _build_review_prompt(
             "",
             "Run the Assistant PR review workflow from your system prompt.",
             "Use the configured GitHub token for all GitHub API calls.",
-            "Run the configured test commands for this repository before approving or merging.",
             "Submit a formal GitHub review, then merge only if the conservative gate is satisfied.",
         ]
     )

@@ -1,6 +1,5 @@
 ﻿from __future__ import annotations
 
-import json
 from typing import List
 
 from mwin import LLMProvider, track
@@ -69,7 +68,6 @@ class Assistant(Agent):
     repo_url: str | None = None
     github_token: str | None = None
     discord_bot_token: str | None = None
-    review_test_commands: dict[str, list[str]] = Field(default_factory=dict)
     sandbox_config: SandboxConfig = PYTHON_312
     sandbox_workspace_key: str | None = None
     tool_definitions: List[dict] = Field(default_factory=lambda: [
@@ -152,10 +150,6 @@ class Assistant(Agent):
         else:
             repo_lines.append("- Nexus assistant event memory: not configured")
         repo_lines.append(f"- Merge method: squash unless the task says otherwise")
-        repo_lines.append(
-            "- Configured test commands: "
-            + json.dumps(self.review_test_commands, ensure_ascii=True)
-        )
         self.system_prompt = self.system_prompt + "\n".join(repo_lines) + "\n"
 
         installed_skills = await self.configure_skills(self._sandbox, self.github_repo)
@@ -241,7 +235,6 @@ class Assistant(Agent):
         repo_url: str | None = None,
         github_token: str | None = None,
         discord_bot_token: str | None = None,
-        review_test_commands: dict[str, list[str]] | None = None,
         sandbox_config: SandboxConfig = PYTHON_312,
         sandbox_workspace_key: str | None = None,
         **_: object,
@@ -259,7 +252,6 @@ class Assistant(Agent):
             repo_url=repo_url,
             github_token=github_token,
             discord_bot_token=discord_bot_token,
-            review_test_commands=review_test_commands or {},
             sandbox_config=sandbox_config,
             sandbox_workspace_key=sandbox_workspace_key,
         )

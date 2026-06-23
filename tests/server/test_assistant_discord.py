@@ -123,7 +123,6 @@ def make_settings() -> Settings:
         assistant_github_token="assistant-token",
         assistant_poll_interval_seconds=120,
         assistant_merge_method="squash",
-        assistant_test_commands={"owner/repo": ["pytest"]},
     )
 
 

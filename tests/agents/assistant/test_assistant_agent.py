@@ -54,7 +54,6 @@ def make_assistant() -> Assistant:
         github_repo="owner/repo",
         github_token="github-token",
         discord_bot_token="discord-token",
-        review_test_commands={"owner/repo": ["pytest"]},
         sandbox_workspace_key="workspace-key",
     )
 
@@ -120,7 +119,6 @@ def test_assistant_tool_kits_are_review_scoped():
                 assert "- Discord messaging: configured" in assistant.system_prompt
                 assert "- Nexus assistant agent instance ID: agent-instance-id" in assistant.system_prompt
                 assert "- Nexus assistant event memory: configured" in assistant.system_prompt
-                assert '"owner/repo": ["pytest"]' in assistant.system_prompt
         pool.acquire.assert_awaited_once()
         pool.release.assert_awaited_once_with(sandbox)
 

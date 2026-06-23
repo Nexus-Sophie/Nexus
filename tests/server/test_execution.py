@@ -447,7 +447,6 @@ def test_build_assistant_agent_as_review_agent(monkeypatch):
         max_attempts=8,
         github_tokens={"assistant": "assistant-token"},
         discord_gateway_bot_token="discord-token",
-        assistant_test_commands={"owner/repo": ["pytest"]},
     )
 
     monkeypatch.setitem(agents.AGENT_BUILDERS, "assistant", FakeAssistant)
@@ -470,7 +469,6 @@ def test_build_assistant_agent_as_review_agent(monkeypatch):
         "sandbox_workspace_key": "workspace",
         "github_token": "assistant-token",
         "discord_bot_token": "discord-token",
-        "review_test_commands": {"owner/repo": ["pytest"]},
     }
 
 
